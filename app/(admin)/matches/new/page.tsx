@@ -1,9 +1,8 @@
 "use client";
 import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
+import { zodResolver } from "@hookform/resolvers/zod"; // ✅
 import { CreateMatchSchema } from "@/lib/zod-schemas";
 import { z } from "zod";
-import { v4 as uuid } from "uuid";
 import { queueOp, replayOps } from "@/lib/offline/offline-queue";
 
 export default function NewMatchPage() {
@@ -11,7 +10,7 @@ export default function NewMatchPage() {
   const form = useForm<z.infer<typeof CreateMatchSchema>>({
     resolver: zodResolver(CreateMatchSchema),
     defaultValues: {
-      request_id: uuid(),
+      request_id: crypto.randomUUID(),
       tournament_id: defaultTournament,
       played_at: new Date().toISOString(),
     },
