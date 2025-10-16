@@ -18,6 +18,7 @@ export async function POST(req: NextRequest) {
     match_id,
     player_id: p.player_id,
     position: p.position,
+    knockouts: p.knockouts ?? 0, // 👈 novo
   }));
   const { error } = await supa.from("match_participants").insert(rows);
   if (error) return NextResponse.json({ error }, { status: 500 });

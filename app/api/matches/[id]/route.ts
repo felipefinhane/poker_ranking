@@ -33,9 +33,15 @@ export async function PATCH(
   const supa = supabaseAdmin();
   // Atualiza posições (trigger recalc points)
   for (const p of participants) {
+    const patch: any = {};
+    if (typeof p.position === "number") patch.position = p.position;
+    if (typeof p.knockouts === "number") patch.knockouts = p.knockouts; // 👈 novo
+
+    if (Object.keys(patch).length === 0) continue;
+
     const { error } = await supa
       .from("match_participants")
-      .update({ position: p.position })
+      .update(patch)
       .eq("match_id", params.id)
       .eq("player_id", p.player_id);
     if (error) return NextResponse.json({ error }, { status: 500 });
