@@ -1,0 +1,97 @@
+# ------------------------------------------
+# 📦 Node / Next.js / TypeScript project
+# ------------------------------------------
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnp/
+.pnp.js
+.yarn/
+.yarnrc.yml
+.npmrc
+
+# Output
+.next/
+out/
+build/
+dist/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+logs/
+*.pid
+*.seed
+*.pid.lock
+
+# Local environment
+.env
+.env.*.local
+.env.local
+.envrc
+.envrc.local
+
+# Supabase keys (keep only env.example in repo)
+supabase/.temp/
+supabase/.branches/
+supabase/.env
+
+# OS & IDE files
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.bak
+
+# TypeScript
+*.tsbuildinfo
+
+# Testing
+coverage/
+.jest/
+__tests__/coverage/
+*.lcov
+
+# Linting & cache
+.eslintcache
+.stylelintcache
+.cache/
+.next/cache/
+.vercel/cache/
+
+# PWA / build artifacts
+public/sw.js
+public/workbox-*.js
+public/worker-*.js
+public/precache-manifest*.js
+*.manifest.json
+
+# Miscellaneous
+*.tgz
+*.zip
+*.tar
+*.gz
+
+# Lock files (optional: keep if you want reproducible builds)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ------------------------------------------
+# 🧩 Custom for this project
+# ------------------------------------------
+# Local data & SQLite
+data/
+tmp/
+local.db
+local.sqlite
+
+# Supabase CLI (if you use it)
+.supabase/
