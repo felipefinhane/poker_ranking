@@ -1,21 +1,24 @@
+// app/api/ranking/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { GetRankingSchema } from "@/lib/zod-schemas";
-import { supabaseClient } from "@/lib/supabaseClient";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const tournament_id = searchParams.get("tournament_id");
-  const parsed = GetRankingSchema.safeParse({ tournament_id });
-  if (!parsed.success)
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
+  const url = new URL(req.url);
+  const tournament_id = url.searchParams.get("tournament_id");
+  if (!tournament_id) {
+    return NextResponse.json(
+      { error: "tournament_id is required" },
+      { status: 400 },
+    );
+  }
 
-  const supa = supabaseClient();
+  const supa = supabaseAdmin();
   const { data, error } = await supa
-    .from("ranking")
-    .select("*")
+    .from("ranking_positions")
+    .select("position, player_name, total_knockouts, total_points")
     .eq("tournament_id", tournament_id)
-    .order("total_points", { ascending: false });
-  if (error) return NextResponse.json({ error }, { status: 500 });
+    .order("position", { ascending: true });
 
-  return NextResponse.json({ rows: data });
+  if (error) return NextResponse.json({ error }, { status: 500 });
+  return NextResponse.json({ rows: data ?? [] });
 }

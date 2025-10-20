@@ -1,215 +1,193 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import {
+  Table,
+  TableHeader,
+  TableRow,
+  TableHead,
+  TableBody,
+  TableCell,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 
 type Row = {
   position: number;
   player_name: string;
-  total_knockouts: number; // Almas
+  total_knockouts: number;
   total_points: number;
 };
 
 async function fetchRanking(tournamentId: string): Promise<Row[]> {
-  const res = await fetch(`/api/ranking?tournament_id=${tournamentId}`, {
+  const r = await fetch(`/api/ranking?tournament_id=${tournamentId}`, {
     cache: "no-store",
   });
-  if (!res.ok) throw new Error("Failed to load ranking");
-  const json = await res.json();
-  return (json.rows ?? []) as Row[];
+  if (!r.ok) throw new Error("Failed to load ranking");
+  const j = await r.json();
+  return (j.rows ?? []) as Row[];
 }
 
 function Medal({ pos }: { pos: number }) {
   if (pos === 1)
     return (
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-yellow-500/20 text-yellow-300 font-bold">
+      <span className="text-lg" title="1º">
         🥇
       </span>
     );
   if (pos === 2)
     return (
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-zinc-500/20 text-zinc-200">
+      <span className="text-lg" title="2º">
         🥈
       </span>
     );
   if (pos === 3)
     return (
-      <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-amber-700/20 text-amber-300">
+      <span className="text-lg" title="3º">
         🥉
       </span>
     );
   return (
-    <span className="inline-flex items-center justify-center w-7 h-7 rounded-full bg-zinc-800 text-zinc-300 text-[13px]">
+    <span
+      title={`${pos}º`}
+      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-muted text-foreground text-xs font-semibold"
+    >
       {pos}
     </span>
   );
 }
 
-function SkeletonRow({ variant = "card" as "card" | "table" }) {
-  if (variant === "card") {
-    return (
-      <div className="rounded-xl border border-zinc-800 p-4 bg-zinc-900/40 animate-pulse">
-        <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-full bg-zinc-800" />
-          <div className="h-4 w-32 bg-zinc-800 rounded" />
-          <div className="ml-auto h-6 w-12 bg-zinc-800 rounded" />
-        </div>
-        <div className="mt-3 h-3 w-20 bg-zinc-800 rounded" />
-      </div>
-    );
-  }
-  return (
-    <tr className="animate-pulse">
-      <td className="px-4 py-4">
-        <div className="w-7 h-7 rounded-full bg-zinc-800" />
-      </td>
-      <td className="px-4 py-4">
-        <div className="h-4 w-36 bg-zinc-800 rounded" />
-      </td>
-      <td className="px-4 py-4">
-        <div className="h-6 w-12 bg-zinc-800 rounded" />
-      </td>
-      <td className="px-4 py-4">
-        <div className="h-5 w-16 bg-zinc-800 rounded" />
-      </td>
-    </tr>
-  );
-}
-
 export default function RankTable({ tournamentId }: { tournamentId: string }) {
-  const { data, isLoading, error, refetch, isFetching } = useQuery({
+  const { data, isLoading, isFetching, refetch, error } = useQuery({
     queryKey: ["ranking", tournamentId],
     queryFn: () => fetchRanking(tournamentId),
-    refetchInterval: 15000, // auto-refresh a cada 15s
+    refetchInterval: 20000,
   });
-
-  const handleRefresh = useCallback(() => {
-    refetch();
-  }, [refetch]);
-
-  // Mobile-first cards
-  if (isLoading) {
-    return (
-      <div className="space-y-3 md:hidden">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <SkeletonRow key={i} variant="card" />
-        ))}
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-xl border border-red-900/40 bg-red-950/40 p-4">
-        <p className="text-red-300">Erro ao carregar ranking.</p>
-        <button
-          onClick={handleRefresh}
-          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-red-800 px-3 py-1.5 text-sm text-red-200 hover:bg-red-900/20"
-        >
-          Tentar novamente
-        </button>
-      </div>
-    );
-  }
 
   const rows = data ?? [];
 
+  if (error) {
+    return (
+      <Card>
+        <CardContent className="p-4 text-sm text-destructive">
+          Erro ao carregar ranking.
+          <div className="mt-3">
+            <Button onClick={() => refetch()} size="sm" variant="outline">
+              Tentar novamente
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <>
-      {/* Header + Ações */}
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm text-zinc-400">
-          {isFetching ? "Atualizando…" : `Atualizado agora`}
-        </div>
-        <button
-          onClick={handleRefresh}
-          className="rounded-lg border border-zinc-800 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-900"
-        >
+      {/* Top bar */}
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">
+          {isFetching ? "Atualizando…" : "Atualizado agora"}
+        </p>
+        <Button size="sm" variant="outline" onClick={() => refetch()}>
           Atualizar
-        </button>
+        </Button>
       </div>
 
-      {/* Mobile (cards) */}
-      <div className="md:hidden space-y-3">
-        {rows.length === 0 && (
-          <div className="rounded-xl border border-zinc-800 p-6 text-center text-zinc-400">
-            Ainda não há partidas para este torneio.
-          </div>
+      {/* MOBILE: cards */}
+      <div className="space-y-3 md:hidden">
+        {isLoading &&
+          Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4 h-16 animate-pulse bg-muted/30 rounded" />
+            </Card>
+          ))}
+
+        {!isLoading && rows.length === 0 && (
+          <Card>
+            <CardContent className="p-6 text-center text-sm text-muted-foreground">
+              Ainda não há partidas para este torneio.
+            </CardContent>
+          </Card>
         )}
-        {rows.map((r) => (
-          <div
-            key={`${r.position}-${r.player_name}`}
-            className="rounded-xl border border-zinc-800 p-4 bg-gradient-to-b from-zinc-900/60 to-transparent"
-          >
-            <div className="flex items-center gap-3">
-              <Medal pos={r.position} />
-              <div className="font-medium">{r.player_name}</div>
-              <div className="ml-auto inline-flex items-center gap-2">
-                <span className="rounded-full border border-zinc-800 px-2 py-0.5 text-xs text-zinc-300">
-                  Almas: <b className="ml-1">{r.total_knockouts}</b>
-                </span>
-              </div>
-            </div>
 
-            <div className="mt-3 flex items-baseline justify-between">
-              <span className="text-sm text-zinc-400">Pontuação final</span>
-              <span className="text-lg font-semibold tracking-tight">
-                {r.total_points}
-              </span>
-            </div>
-          </div>
-        ))}
+        {!isLoading &&
+          rows.map((r) => (
+            <Card key={`${r.position}-${r.player_name}`}>
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-3 text-base">
+                  <Medal pos={r.position} /> {/* 👈 POSIÇÃO */}
+                  <span className="font-medium">{r.player_name}</span>
+                  <Badge className="ml-auto" variant="outline">
+                    Almas {r.total_knockouts}
+                  </Badge>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="flex items-baseline justify-between text-sm">
+                  <span className="text-muted-foreground">Pontuação final</span>
+                  <span className="font-semibold tabular-nums">
+                    {r.total_points}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
       </div>
 
-      {/* Desktop (table) */}
-      <div className="hidden md:block overflow-hidden rounded-xl border border-zinc-800">
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="bg-zinc-900/70 sticky top-0">
-              <tr className="text-left">
-                <th className="px-4 py-3">Posição</th>
-                <th className="px-4 py-3">Nome</th>
-                <th className="px-4 py-3">Almas</th>
-                <th className="px-4 py-3">Pontuação</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-4 py-6 text-center text-zinc-400"
-                  >
-                    Ainda não há partidas para este torneio.
-                  </td>
-                </tr>
-              )}
-              {rows.map((r, idx) => (
-                <tr
-                  key={`${r.position}-${idx}`}
-                  className="border-t border-zinc-800/70 hover:bg-zinc-900/40"
-                >
-                  <td className="px-4 py-3">
-                    <Medal pos={r.position} />
-                  </td>
-                  <td className="px-4 py-3 font-medium">{r.player_name}</td>
-                  <td className="px-4 py-3">
-                    <span className="inline-flex items-center rounded-full border border-zinc-800 px-2 py-0.5 text-xs">
-                      {r.total_knockouts}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 font-semibold">{r.total_points}</td>
-                </tr>
+      {/* DESKTOP: tabela */}
+      <Card className="hidden md:block">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-lg">Ranking geral</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {isLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-8 w-full animate-pulse rounded bg-muted/30"
+                />
               ))}
-              {/* Skeleton enquanto refetch (opcional) */}
-              {isFetching &&
-                Array.from({ length: 2 }).map((_, i) => (
-                  <SkeletonRow key={`sk-${i}`} variant="table" />
+            </div>
+          ) : rows.length === 0 ? (
+            <div className="p-6 text-center text-sm text-muted-foreground">
+              Ainda não há partidas para este torneio.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-24">Posição</TableHead>
+                  <TableHead>Nome</TableHead>
+                  <TableHead>Almas</TableHead>
+                  <TableHead className="text-right">Pontuação</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow
+                    key={`${r.player_name}-${i}`}
+                    className="hover:bg-muted/40"
+                  >
+                    <TableCell className="font-medium">
+                      <Medal pos={r.position} />
+                    </TableCell>{" "}
+                    {/* 👈 POSIÇÃO */}
+                    <TableCell>{r.player_name}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{r.total_knockouts}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-semibold tabular-nums">
+                      {r.total_points}
+                    </TableCell>
+                  </TableRow>
                 ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </>
   );
 }
