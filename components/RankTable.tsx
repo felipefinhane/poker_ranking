@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 type Row = {
   position: number;
   player_name: string;
-  total_knockouts: number;
+  total_knockouts: number; // Almas
   total_points: number;
 };
 
@@ -30,30 +30,25 @@ async function fetchRanking(tournamentId: string): Promise<Row[]> {
 }
 
 function Medal({ pos }: { pos: number }) {
-  if (pos === 1)
-    return (
-      <span className="text-lg" title="1º">
-        🥇
-      </span>
-    );
-  if (pos === 2)
-    return (
-      <span className="text-lg" title="2º">
-        🥈
-      </span>
-    );
-  if (pos === 3)
-    return (
-      <span className="text-lg" title="3º">
-        🥉
-      </span>
-    );
+  let strPosition = "";
+  switch (pos) {
+    case 1:
+      strPosition = "🥇";
+      break;
+
+    case 2:
+      strPosition = "🥈";
+      break;
+    case 3:
+      strPosition = "🥉";
+      break;
+    default:
+      strPosition = pos + "º";
+      break;
+  }
   return (
-    <span
-      title={`${pos}º`}
-      className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-muted text-foreground text-xs font-semibold"
-    >
-      {pos}
+    <span title={`${pos}º`} className="text-base md:text-lg ">
+      {strPosition}
     </span>
   );
 }
@@ -84,8 +79,81 @@ export default function RankTable({ tournamentId }: { tournamentId: string }) {
 
   return (
     <>
-      {/* Top bar */}
-      <div className="mb-4 flex items-center justify-between">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base md:text-lg">Ranking geral</CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          {/* TABELA ÚNICA (mobile-first, compacta) */}
+          <div className="overflow-x-auto">
+            <Table className="text-[13px] md:text-sm">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-16 md:w-20">Pos.</TableHead>
+                  <TableHead className="text-center w-24">Nome</TableHead>
+                  <TableHead className="text-center w-24">Almas</TableHead>
+                  <TableHead className="text-center w-28">Pontos</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  Array.from({ length: 8 }).map((_, i) => (
+                    <TableRow key={i} className="animate-pulse">
+                      <TableCell>
+                        <div className="h-5 w-10 rounded bg-muted/40" />
+                      </TableCell>
+                      <TableCell>
+                        <div className="h-5 w-32 rounded bg-muted/40" />
+                      </TableCell>
+                      <TableCell>
+                        <div className="h-5 w-10 rounded bg-muted/40" />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="h-5 w-12 ml-auto rounded bg-muted/40" />
+                      </TableCell>
+                    </TableRow>
+                  ))
+                ) : rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={4}
+                      className="py-6 text-center text-muted-foreground"
+                    >
+                      Ainda não há partidas para este torneio.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  rows.map((r, i) => (
+                    <TableRow
+                      key={`${r.player_name}-${i}`}
+                      className="hover:bg-muted/40"
+                    >
+                      <TableCell className="text-center font-medium">
+                        <Medal pos={r.position} />
+                      </TableCell>
+                      <TableCell className="text-center truncate">
+                        {r.player_name}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className="text-center px-2 py-0.5"
+                        >
+                          {r.total_knockouts}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-center font-semibold tabular-nums">
+                        {r.total_points}
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+      <div className="mb-3 flex items-center justify-between">
         <p className="text-xs text-muted-foreground">
           {isFetching ? "Atualizando…" : "Atualizado agora"}
         </p>
@@ -93,101 +161,6 @@ export default function RankTable({ tournamentId }: { tournamentId: string }) {
           Atualizar
         </Button>
       </div>
-
-      {/* MOBILE: cards */}
-      <div className="space-y-3 md:hidden">
-        {isLoading &&
-          Array.from({ length: 6 }).map((_, i) => (
-            <Card key={i}>
-              <CardContent className="p-4 h-16 animate-pulse bg-muted/30 rounded" />
-            </Card>
-          ))}
-
-        {!isLoading && rows.length === 0 && (
-          <Card>
-            <CardContent className="p-6 text-center text-sm text-muted-foreground">
-              Ainda não há partidas para este torneio.
-            </CardContent>
-          </Card>
-        )}
-
-        {!isLoading &&
-          rows.map((r) => (
-            <Card key={`${r.position}-${r.player_name}`}>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center gap-3 text-base">
-                  <Medal pos={r.position} /> {/* 👈 POSIÇÃO */}
-                  <span className="font-medium">{r.player_name}</span>
-                  <Badge className="ml-auto" variant="outline">
-                    Almas {r.total_knockouts}
-                  </Badge>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
-                <div className="flex items-baseline justify-between text-sm">
-                  <span className="text-muted-foreground">Pontuação final</span>
-                  <span className="font-semibold tabular-nums">
-                    {r.total_points}
-                  </span>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-      </div>
-
-      {/* DESKTOP: tabela */}
-      <Card className="hidden md:block">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Ranking geral</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="space-y-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-8 w-full animate-pulse rounded bg-muted/30"
-                />
-              ))}
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="p-6 text-center text-sm text-muted-foreground">
-              Ainda não há partidas para este torneio.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-24">Posição</TableHead>
-                  <TableHead>Nome</TableHead>
-                  <TableHead>Almas</TableHead>
-                  <TableHead className="text-right">Pontuação</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((r, i) => (
-                  <TableRow
-                    key={`${r.player_name}-${i}`}
-                    className="hover:bg-muted/40"
-                  >
-                    <TableCell className="font-medium">
-                      <Medal pos={r.position} />
-                    </TableCell>{" "}
-                    {/* 👈 POSIÇÃO */}
-                    <TableCell>{r.player_name}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{r.total_knockouts}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold tabular-nums">
-                      {r.total_points}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
     </>
   );
 }

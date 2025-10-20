@@ -10,7 +10,7 @@ export default function HomePage() {
     <main className="max-w-2xl mx-auto p-4">
       <h1 className="text-2xl font-bold mb-2">Ranking do Campeonato</h1>
       <p className="text-sm text-muted-foreground mb-4">
-        Critérios de desempate: Pontos → Almas → Última partida → Nome
+        Critérios de desempate: Pontos → Almas
       </p>
 
       {/* ✅ Renderiza apenas a versão nova */}
