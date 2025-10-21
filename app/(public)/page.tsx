@@ -1,26 +1,38 @@
+// app/(public)/page.tsx
 "use client";
 
+import Link from "next/link";
 import RankTable from "@/components/RankTable";
-import InstallPWA from "@/components/InstallPWA"; // 👈 ADICIONE ISTO
+import { Button } from "@/components/ui/button";
+// import InstallPWA from "@/components/InstallPWA"; // se estiver usando
 
 export default function HomePage() {
-  const tournament_id = process.env.NEXT_PUBLIC_DEFAULT_TOURNAMENT_ID!;
+  const tournamentId = process.env.NEXT_PUBLIC_DEFAULT_TOURNAMENT_ID!;
 
   return (
-    <main className="max-w-2xl mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-2">Ranking do Campeonato</h1>
-      <p className="text-sm text-muted-foreground mb-4">
-        Critérios de desempate: Pontos → Almas
-      </p>
+    <main className="mx-auto w-full max-w-3xl px-4 py-6 md:py-8">
+      <header className="mb-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Ranking do Campeonato
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            Critérios de desempate: Pontos → Almas
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link href="/matches" passHref>
+            <Button size="sm" variant="outline">
+              Partidas
+            </Button>
+          </Link>
+        </div>
+      </header>
 
-      {/* ✅ Renderiza apenas a versão nova */}
-      <RankTable tournamentId={tournament_id} />
+      {/* opcional: banner p/ instalar PWA no mobile */}
+      {/* <div className="md:hidden mb-4"><InstallPWA /></div> */}
 
-      {/* Apenas mobile: botão para instalar PWA */}
-      <div className="md:hidden mt-4">
-        {/* @ts-ignore */}
-        <InstallPWA />
-      </div>
+      <RankTable tournamentId={tournamentId} />
     </main>
   );
 }

@@ -1,50 +1,69 @@
-import { NextRequest, NextResponse } from "next/server";
-import { PatchMatchPositionsSchema } from "@/lib/zod-schemas";
-import { once } from "@/lib/idempotency";
-import { supabaseClient } from "@/lib/supabaseClient";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
+// app/api/matches/[id]/route.ts
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
+
+const url = process.env.SUPABASE_URL!;
+const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
 export async function GET(
-  _: NextRequest,
+  _req: Request,
   { params }: { params: { id: string } },
 ) {
-  const supa = supabaseClient();
-  const { data, error } = await supa
-    .from("match_participants")
-    .select("*")
-    .eq("match_id", params.id);
-  if (error) return NextResponse.json({ error }, { status: 500 });
-  return NextResponse.json({ rows: data });
-}
+  try {
+    const supabase = createClient(url, anon);
 
-export async function PATCH(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-) {
-  const body = await req.json();
-  const parsed = PatchMatchPositionsSchema.safeParse(body);
-  if (!parsed.success)
-    return NextResponse.json({ error: parsed.error }, { status: 400 });
+    // 1) Dados da partida
+    const { data: match, error: mErr } = await supabase
+      .from("matches")
+      .select("id, tournament_id, played_at")
+      .eq("id", params.id)
+      .single();
 
-  const { request_id, participants } = parsed.data;
-  if (!once(request_id))
-    return NextResponse.json({ status: "duplicate" }, { status: 200 });
+    if (mErr)
+      return NextResponse.json({ error: mErr.message }, { status: 500 });
+    if (!match)
+      return NextResponse.json({ error: "Match not found" }, { status: 404 });
 
-  const supa = supabaseAdmin();
-  // Atualiza posições (trigger recalc points)
-  for (const p of participants) {
-    const patch: any = {};
-    if (typeof p.position === "number") patch.position = p.position;
-    if (typeof p.knockouts === "number") patch.knockouts = p.knockouts; // 👈 novo
-
-    if (Object.keys(patch).length === 0) continue;
-
-    const { error } = await supa
+    // 2) Participantes (ordem por posição)
+    // Se seu PostgREST exigir alias, troque players(name) por player:players(name) e use p.player?.name no map
+    const { data: parts, error: pErr } = await supabase
       .from("match_participants")
-      .update(patch)
+      .select(
+        `
+        player_id,
+        position,
+        knockouts,
+        points_awarded,
+        players ( name )
+      `,
+      )
       .eq("match_id", params.id)
-      .eq("player_id", p.player_id);
-    if (error) return NextResponse.json({ error }, { status: 500 });
+      .order("position", { ascending: true });
+
+    if (pErr)
+      return NextResponse.json({ error: pErr.message }, { status: 500 });
+
+    const participants = (parts ?? []).map((p: any) => ({
+      player_id: p.player_id,
+      player_name: p.players?.name ?? "—",
+      position: p.position,
+      knockouts: p.knockouts,
+      points_awarded: p.points_awarded,
+    }));
+
+    return NextResponse.json({
+      match: {
+        id: match.id,
+        tournament_id: match.tournament_id,
+        played_at: match.played_at,
+        participants,
+      },
+    });
+  } catch (e: any) {
+    console.error(e);
+    return NextResponse.json(
+      { error: e?.message ?? "Internal error" },
+      { status: 500 },
+    );
   }
-  return NextResponse.json({ ok: true });
 }
