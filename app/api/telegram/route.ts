@@ -2,6 +2,7 @@
 import { NextRequest } from "next/server";
 import { Telegraf, Markup } from "telegraf";
 import { createClient } from "@supabase/supabase-js";
+import { randomUUID } from "crypto";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const SUPA_URL = process.env.SUPABASE_URL!;
@@ -260,7 +261,7 @@ bot.on("callback_query", async (ctx) => {
   // Confirmação final
   if (sess.state === "confirming") {
     if (data === "confirm_save") {
-      const request_id = cryptoRandomUUID();
+      const request_id = randomUUID();
       // monta payload
       const selected: string[] = sess.selected_ids ?? [];
       const positions: Record<string, string> = sess.positions_json ?? {};
