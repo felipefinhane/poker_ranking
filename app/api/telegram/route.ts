@@ -182,7 +182,7 @@ bot.on("callback_query", async (ctx) => {
       }
       // Próximo estado: ordenar colocações
       await setSession(chat_id, user_id, { state: "ordering_positions" });
-      await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([]));
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
       await askNextPosition(ctx, sess.tournament_id, selected, {}, 1);
       return;
     }
@@ -299,13 +299,13 @@ bot.on("callback_query", async (ctx) => {
         process.env.PUBLIC_FRONTEND_URL ||
         "https://poker-ranking-finhane.vercel.app";
       await clearSession(chat_id, user_id);
-      await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([]));
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
       await ctx.reply(`✅ Partida registrada!\n🔗 ${base}/matches/${matchId}`);
       return;
     }
     if (data === "cancel_save") {
       await clearSession(chat_id, user_id);
-      await ctx.editMessageReplyMarkup(Markup.inlineKeyboard([]));
+      await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
       await ctx.reply("Operação cancelada.");
       return;
     }
