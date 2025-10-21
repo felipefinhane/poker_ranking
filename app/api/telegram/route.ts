@@ -4,7 +4,7 @@ import { Telegraf, Markup } from "telegraf";
 import { createClient } from "@supabase/supabase-js";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
-const SUPA_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPA_URL = process.env.SUPABASE_URL!;
 const SUPA_SVC = process.env.SUPABASE_SERVICE_ROLE_KEY!; // <- service role, backend only
 
 if (!BOT_TOKEN || !SUPA_URL || !SUPA_SVC) {
