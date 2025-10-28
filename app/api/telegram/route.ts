@@ -28,6 +28,18 @@ type RankRow = {
 };
 
 // HELPERS ======
+function getSafeIds(ctx: any) {
+  const chatId =
+    ctx.chat?.id ??
+    (ctx.callbackQuery && (ctx.callbackQuery as any).message?.chat?.id);
+
+  const userId = ctx.from?.id;
+
+  if (!chatId || !userId) {
+    throw new Error("Não foi possível identificar chatId/userId do contexto.");
+  }
+  return { chatId, userId };
+}
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
@@ -391,7 +403,8 @@ bot.on("callback_query", async (ctx) => {
   // ===== atalhos do /menu =====
   if (data === "menu_newmatch") {
     // mesmo fluxo do /nova_partida
-    const chat = await getOrCreateChat(ctx.chat.id);
+    const { chatId, userId } = getSafeIds(ctx);
+    const chat = await getOrCreateChat(chatId);
     if (!chat.tournament_id) {
       await ctx.answerCbQuery();
       return ctx.reply("Defina o torneio com /set_torneio <UUID> antes.");
@@ -410,7 +423,7 @@ bot.on("callback_query", async (ctx) => {
       return ctx.reply("Nenhum jogador cadastrado.");
     }
 
-    await setSession(ctx.chat.id, ctx.from.id, {
+    await setSession(chatId, userId, {
       state: "selecting_players",
       tournament_id: chat.tournament_id,
       selected_ids: [],
