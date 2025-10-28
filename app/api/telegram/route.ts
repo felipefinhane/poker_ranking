@@ -39,19 +39,6 @@ type RankRow = {
 /* =========================================================================
  * UI HELPERS (REPLY KEYBOARD / INLINE)
  * ========================================================================= */
-function mainReplyKeyboard(): ReplyKeyboardMarkup {
-  return {
-    keyboard: [
-      [{ text: "➕ Nova Partida" }],
-      [{ text: "🏆 Ranking" }, { text: "🎲 Partidas" }],
-      [{ text: "⚙️ Trocar Torneio" }],
-    ],
-    resize_keyboard: true,
-    is_persistent: true,
-    one_time_keyboard: false,
-  };
-}
-
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
@@ -143,11 +130,16 @@ async function ensureCommands() {
       { command: "start", description: "Ajuda / status" },
       { command: "menu", description: "Abrir menu principal" },
       { command: "set_torneio", description: "Definir torneio padrão (UUID)" },
+      { command: "tournament_create", description: "Criar torneio (admin)" },
+      { command: "tournaments", description: "Listar e trocar torneio" },
+      { command: "admins_add", description: "Adicionar admin (admin)" },
+      { command: "admins_remove", description: "Remover admin (admin)" },
+      { command: "admins_list", description: "Listar admins" },
       {
         command: "nova_partida",
         description: "Registrar nova partida (wizard)",
       },
-      { command: "partidas", description: "Últimas partidas" },
+      { command: "partidas", description: "Últimas partidas (link)" },
       { command: "ranking", description: "Ver ranking do torneio" },
     ]);
   } catch (e) {
@@ -228,6 +220,64 @@ async function canCreateMatch(
     return tidOk || dmOk;
   }
   return dmOk;
+}
+
+function mainReplyKeyboard(): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: "➕ Nova Partida" }],
+      [{ text: "🏆 Ranking" }, { text: "🎲 Partidas" }],
+      [{ text: "⚙️ Trocar Torneio" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    one_time_keyboard: false,
+  };
+}
+
+async function isGlobalAdmin(userId: number): Promise<boolean> {
+  const { data } = await supa
+    .from("telegram_admins")
+    .select("user_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  return !!data;
+}
+
+async function requireGlobalAdmin(ctx: any): Promise<boolean> {
+  const uid = ctx.from?.id;
+  if (!uid) {
+    await ctx.reply("Não consegui identificar seu usuário.");
+    return false;
+  }
+  if (!(await isGlobalAdmin(uid))) {
+    await ctx.reply("🚫 Apenas administradores podem executar este comando.");
+    return false;
+  }
+  return true;
+}
+
+// Tenta pegar um user_id a partir de:
+// 1) argumento numérico no texto (/admins_add 123456),
+// 2) reply a uma mensagem do usuário (ctx.message.reply_to_message.from.id)
+function extractTargetUserId(ctx: any): number | null {
+  const text: string | undefined = (ctx.message as any)?.text;
+  if (text) {
+    const parts = text.trim().split(/\s+/);
+    if (parts.length >= 2 && /^\d+$/.test(parts[1])) {
+      return Number(parts[1]);
+    }
+  }
+  const replyFrom = (ctx.message as any)?.reply_to_message?.from?.id;
+  if (replyFrom && typeof replyFrom === "number") return replyFrom;
+  return null;
+}
+
+function parseTournamentName(text: string): string | null {
+  // /tournament_create <nome livre...>
+  const m = text.match(/^\/tournament_create(?:@\w+)?\s+(.+)$/i);
+  if (m && m[1]) return m[1].trim();
+  return null;
 }
 
 /* =========================================================================
@@ -577,6 +627,167 @@ bot.command("nova_partida", async (ctx) => {
   );
 });
 
+// /admins_add <user_id>  (ou responda a uma msg do usuário e só use /admins_add)
+bot.command("admins_add", async (ctx) => {
+  if (!(await requireGlobalAdmin(ctx))) return;
+  const target = extractTargetUserId(ctx);
+  if (!target) {
+    return ctx.reply(
+      "Uso: /admins_add <telegram_user_id>\nOu responda a uma mensagem da pessoa e envie /admins_add.",
+    );
+  }
+  const { error } = await supa
+    .from("telegram_admins")
+    .upsert({ user_id: target });
+  if (error) {
+    console.error(error);
+    return ctx.reply("❌ Erro ao adicionar admin.");
+  }
+  await ctx.reply(`✅ Admin adicionado: ${target}`);
+});
+
+// /admins_remove <user_id>  (ou via reply)
+bot.command("admins_remove", async (ctx) => {
+  if (!(await requireGlobalAdmin(ctx))) return;
+  const target = extractTargetUserId(ctx);
+  if (!target) {
+    return ctx.reply(
+      "Uso: /admins_remove <telegram_user_id>\nOu responda a uma mensagem da pessoa e envie /admins_remove.",
+    );
+  }
+  const { error } = await supa
+    .from("telegram_admins")
+    .delete()
+    .eq("user_id", target);
+  if (error) {
+    console.error(error);
+    return ctx.reply("❌ Erro ao remover admin.");
+  }
+  await ctx.reply(`✅ Admin removido: ${target}`);
+});
+
+// /admins_list
+bot.command("admins_list", async (ctx) => {
+  if (!(await requireGlobalAdmin(ctx))) return;
+  const { data, error } = await supa
+    .from("telegram_admins")
+    .select("user_id")
+    .order("user_id", { ascending: true });
+  if (error) {
+    console.error(error);
+    return ctx.reply("❌ Erro ao listar admins.");
+  }
+  if (!data?.length) return ctx.reply("Sem admins cadastrados.");
+  const list = data.map((r) => `• ${r.user_id}`).join("\n");
+  await ctx.reply(`👑 *Admins*\n${list}`, { parse_mode: "Markdown" });
+});
+
+// /tournament_create <nome do torneio>
+bot.command("tournament_create", async (ctx) => {
+  if (!(await requireGlobalAdmin(ctx))) return;
+
+  const text: string = (ctx.message as any)?.text ?? "";
+  const name = parseTournamentName(text);
+  if (!name) {
+    return ctx.reply("Uso: /tournament_create <nome do torneio>");
+  }
+
+  const { data, error } = await supa
+    .from("tournaments")
+    .insert({
+      name,
+      start_at: new Date().toISOString(),
+    })
+    .select("id,name")
+    .single();
+
+  if (error) {
+    console.error(error);
+    return ctx.reply("❌ Erro ao criar torneio.");
+  }
+
+  // Torna o criador admin desse torneio também (útil para permissionamento por torneio)
+  const uid = ctx.from.id;
+  await supa.from("tournament_admins").upsert({
+    tournament_id: data.id,
+    user_id: uid,
+  });
+
+  await ctx.reply(`✅ Torneio criado: *${data.name}*\nID: \`${data.id}\``, {
+    parse_mode: "Markdown",
+  });
+});
+
+// /tournaments  → lista e oferece botões para definir no chat
+bot.command("tournaments", async (ctx) => {
+  // Mostra torneios em que o user é admin ou todos se for admin global
+  const uid = ctx.from.id;
+  const global = await isGlobalAdmin(uid);
+
+  let tournaments: { id: string; name: string }[] = [];
+  if (global) {
+    const { data } = await supa
+      .from("tournaments")
+      .select("id,name")
+      .order("start_at", { ascending: false })
+      .limit(12);
+    tournaments = data ?? [];
+  } else {
+    const { data: rows } = await supa
+      .from("tournament_admins")
+      .select("tournaments(id,name)")
+      .eq("user_id", uid)
+      .limit(12);
+    tournaments = (rows ?? []).map((r: any) => r.tournaments).filter(Boolean);
+  }
+
+  if (!tournaments.length) {
+    return ctx.reply("Nenhum torneio disponível para você.");
+  }
+
+  const buttons = tournaments.map((t) => [
+    Markup.button.callback(t.name, `pick_tid_${t.id}`),
+  ]);
+  await ctx.reply("Selecione o torneio para este chat:", {
+    reply_markup: { inline_keyboard: buttons },
+  });
+});
+
+// /tournaments  → lista e oferece botões para definir no chat
+bot.command("tournaments", async (ctx) => {
+  // Mostra torneios em que o user é admin ou todos se for admin global
+  const uid = ctx.from.id;
+  const global = await isGlobalAdmin(uid);
+
+  let tournaments: { id: string; name: string }[] = [];
+  if (global) {
+    const { data } = await supa
+      .from("tournaments")
+      .select("id,name")
+      .order("start_at", { ascending: false })
+      .limit(12);
+    tournaments = data ?? [];
+  } else {
+    const { data: rows } = await supa
+      .from("tournament_admins")
+      .select("tournaments(id,name)")
+      .eq("user_id", uid)
+      .limit(12);
+    tournaments = (rows ?? []).map((r: any) => r.tournaments).filter(Boolean);
+  }
+
+  if (!tournaments.length) {
+    return ctx.reply("Nenhum torneio disponível para você.");
+  }
+
+  const buttons = tournaments.map((t) => [
+    Markup.button.callback(t.name, `pick_tid_${t.id}`),
+  ]);
+  await ctx.reply("Selecione o torneio para este chat:", {
+    reply_markup: { inline_keyboard: buttons },
+  });
+});
+
 /* =========================================================================
  * HEARS (REPLY KEYBOARD BUTTONS)
  * ========================================================================= */
@@ -727,6 +938,31 @@ bot.on("callback_query", async (ctx) => {
       { parse_mode: "Markdown" },
     );
     return;
+  }
+
+  // Trocar torneio pelo menu /tournaments
+  if (data.startsWith("pick_tid_")) {
+    const tid = data.replace("pick_tid_", "");
+    // Permite se for admin global ou admin do torneio
+    const uid = ctx.from.id;
+    const ok =
+      (await isGlobalAdmin(uid)) || (await isTournamentAdmin(tid, uid));
+    if (!ok) {
+      await ctx.answerCbQuery("Sem permissão para usar este torneio.", {
+        show_alert: true,
+      });
+      return;
+    }
+    await supa.from("telegram_chats").upsert({
+      chat_id: chat_id,
+      tournament_id: tid,
+      updated_at: new Date().toISOString(),
+    });
+    await ctx.answerCbQuery("Torneio definido!");
+    await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
+    return ctx.reply(`✅ Torneio atualizado para este chat:\n\`${tid}\``, {
+      parse_mode: "Markdown",
+    });
   }
 
   // fluxo do wizard
