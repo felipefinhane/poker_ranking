@@ -4,13 +4,16 @@ import { Telegraf, Markup } from "telegraf";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
 
+/* =========================================================================
+ * ENV & CLIENTS
+ * ========================================================================= */
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN!;
 const SUPA_URL = process.env.SUPABASE_URL!;
-const SUPA_SVC = process.env.SUPABASE_SERVICE_ROLE_KEY!; // <- service role, backend only
+const SUPA_SVC = process.env.SUPABASE_SERVICE_ROLE_KEY!; // service role (server only)
 
 if (!BOT_TOKEN || !SUPA_URL || !SUPA_SVC) {
   console.error(
-    "Faltam envs: TELEGRAM_BOT_TOKEN, NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY",
+    "Faltam envs: TELEGRAM_BOT_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY",
   );
 }
 
@@ -18,8 +21,13 @@ const supa = createClient(SUPA_URL, SUPA_SVC, {
   auth: { persistSession: false },
 });
 const bot = new Telegraf(BOT_TOKEN);
-const ORDER_DESC = true; // true = pedir do último -> primeiro
 
+// true = perguntar posições do último para o primeiro
+const ORDER_DESC = true;
+
+/* =========================================================================
+ * TYPES
+ * ========================================================================= */
 type RankRow = {
   posicao: number;
   player_name: string;
@@ -27,19 +35,22 @@ type RankRow = {
   total_points: number;
 };
 
-// HELPERS ======
-function getSafeIds(ctx: any) {
-  const chatId =
-    ctx.chat?.id ??
-    (ctx.callbackQuery && (ctx.callbackQuery as any).message?.chat?.id);
-
-  const userId = ctx.from?.id;
-
-  if (!chatId || !userId) {
-    throw new Error("Não foi possível identificar chatId/userId do contexto.");
-  }
-  return { chatId, userId };
+/* =========================================================================
+ * UI HELPERS (REPLY KEYBOARD / INLINE)
+ * ========================================================================= */
+function mainReplyKeyboard() {
+  return {
+    keyboard: [
+      [{ text: "➕ Nova Partida" }],
+      [{ text: "🏆 Ranking" }, { text: "🎲 Partidas" }],
+      [{ text: "⚙️ Trocar Torneio" }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+    one_time_keyboard: false,
+  } as const;
 }
+
 function mainMenuKeyboard() {
   return {
     inline_keyboard: [
@@ -59,28 +70,60 @@ async function showMainMenu(ctx: any) {
     reply_markup: mainMenuKeyboard(),
   });
 }
+
+async function showPersistentMenu(ctx: any) {
+  try {
+    // Teclado fixo
+    await ctx.reply("📋 Menu principal:", {
+      reply_markup: mainReplyKeyboard(),
+    });
+
+    // Atalhos inline + tentativa de fixar mensagem (em grupos)
+    const base =
+      process.env.PUBLIC_FRONTEND_URL ||
+      "https://poker-ranking-finhane.vercel.app";
+
+    const msg = await ctx.reply(
+      "Atalhos rápidos:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("➕ Nova Partida", "menu_newmatch")],
+        [
+          Markup.button.callback("🏆 Ranking", "menu_ranking"),
+          Markup.button.url("🎲 Partidas", `${base}/matches`),
+        ],
+        [Markup.button.callback("⚙️ Trocar Torneio", "menu_set_tournament")],
+      ]),
+    );
+
+    try {
+      await ctx.pinChatMessage(msg.message_id);
+    } catch {
+      // ignorar se não puder fixar
+    }
+  } catch (e) {
+    console.error("showPersistentMenu error", e);
+  }
+}
+
+/* =========================================================================
+ * GENERAL HELPERS
+ * ========================================================================= */
 function medal(pos: number) {
   if (pos === 1) return "🥇";
   if (pos === 2) return "🥈";
   if (pos === 3) return "🥉";
   return `${pos}º`;
 }
-
 function padRight(s: string, n: number) {
-  if (s.length >= n) return s;
-  return s + " ".repeat(n - s.length);
+  return s.length >= n ? s : s + " ".repeat(n - s.length);
 }
-
 function padLeft(s: string, n: number) {
-  if (s.length >= n) return s;
-  return " ".repeat(n - s.length) + s;
+  return s.length >= n ? s : " ".repeat(n - s.length) + s;
 }
-
 function asMonospaceTable(rows: RankRow[]) {
   const nameWidth = Math.max(6, ...rows.map((r) => r.player_name.length));
   const header = `POS  ${padRight("NOME", nameWidth)}  ALMA  PTS`;
   const line = "─".repeat(header.length);
-
   const body = rows
     .map((r) => {
       const pos = padRight(medal(r.posicao), 3);
@@ -90,7 +133,6 @@ function asMonospaceTable(rows: RankRow[]) {
       return `${pos}  ${name}  ${alma}  ${pts}`;
     })
     .join("\n");
-
   return "```\n" + header + "\n" + line + "\n" + body + "\n```";
 }
 
@@ -98,7 +140,7 @@ async function ensureCommands() {
   try {
     await bot.telegram.setMyCommands([
       { command: "start", description: "Ajuda / status" },
-      { command: "menu", description: "Abrir menu principal" }, // <<<<<
+      { command: "menu", description: "Abrir menu principal" },
       { command: "set_torneio", description: "Definir torneio padrão (UUID)" },
       {
         command: "nova_partida",
@@ -117,83 +159,79 @@ function sumKos(kos: Record<string, number>): number {
 }
 
 async function currentOrderFromPositions(positions: Record<string, string>) {
-  const order = Object.keys(positions)
+  return Object.keys(positions)
     .map((k) => Number(k))
     .sort((a, b) => a - b)
     .map((k) => positions[String(k)]);
-  return order; // array de player_ids ordenado pela colocação (1..n)
 }
 
-async function askKnockoutsSmart(ctx: any) {
-  const chat_id = ctx.chat.id,
-    user_id = ctx.from.id;
+function getSafeIds(ctx: any) {
+  const chatId =
+    ctx.chat?.id ??
+    (ctx.callbackQuery && (ctx.callbackQuery as any).message?.chat?.id);
+  const userId = ctx.from?.id;
+  if (!chatId || !userId) {
+    throw new Error("Não foi possível identificar chatId/userId do contexto.");
+  }
+  return { chatId, userId };
+}
 
-  const { data: sess } = await supa
-    .from("telegram_sessions")
-    .select("*")
-    .eq("chat_id", chat_id)
-    .eq("user_id", user_id)
-    .order("updated_at", { ascending: false })
-    .limit(1)
+/* =========================================================================
+ * PERMISSIONS HELPERS
+ * ========================================================================= */
+async function isGroupAdmin(ctx: any): Promise<boolean> {
+  const chat = ctx.chat;
+  if (!chat || chat.type === "private") return false;
+  try {
+    const member = await ctx.telegram.getChatMember(chat.id, ctx.from.id);
+    const s = member.status;
+    return s === "creator" || s === "administrator";
+  } catch {
+    return false;
+  }
+}
+async function isDMWhitelisted(ctx: any): Promise<boolean> {
+  if (!ctx.from?.id) return false;
+  const { data } = await supa
+    .from("telegram_admins")
+    .select("user_id")
+    .eq("user_id", ctx.from.id)
     .maybeSingle();
-
-  if (!sess) return;
-
-  const selected: string[] = sess.selected_ids ?? [];
-  const positions: Record<string, string> = sess.positions_json ?? {};
-  const kos: Record<string, number> = sess.kos_json ?? {};
-
-  const N = selected.length;
-  const POOL = Math.max(0, N - 1 - sumKos(kos)); // saldo remanescente
-
-  // monta teclas: uma linha por jogador, com - [nome: K] +
-  const order = await currentOrderFromPositions(positions);
-  const { data: players } = await supa
-    .from("players")
-    .select("id,name")
-    .in("id", order);
-  const nameOf = (id: string) => players?.find((p) => p.id === id)?.name ?? "—";
-
-  const rows: any[] = order.map((pid) => {
-    const k = Number(kos[pid] ?? 0);
-    // desabilitar + quando POOL=0; desabilitar - quando k=0
-    return [
-      Markup.button.callback("−", `ko_${pid}_minus`),
-      Markup.button.callback(`${nameOf(pid)}: ${k}`, "noop"),
-      Markup.button.callback(POOL > 0 ? "+" : " ", `ko_${pid}_plus`),
-    ];
-  });
-
-  // mostrar o saldo remanescente e botões finais
-  rows.push([
-    Markup.button.callback(`✅ Concluir (restam ${POOL})`, "done_kos"),
-  ]);
-
-  await ctx.reply(
-    `Ajuste as *almas* (KOs). Saldo total disponível: *${N - 1 - sumKos(kos)}*`,
-    { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
-  );
+  return !!data;
+}
+async function isTournamentAdmin(
+  tournament_id: string,
+  userId: number,
+): Promise<boolean> {
+  const { data } = await supa
+    .from("tournament_admins")
+    .select("user_id")
+    .eq("tournament_id", tournament_id)
+    .eq("user_id", userId)
+    .maybeSingle();
+  return !!data;
+}
+async function canCreateMatch(
+  ctx: any,
+  tournament_id?: string,
+): Promise<boolean> {
+  // grupo: admin do grupo
+  if (ctx.chat?.type && ctx.chat.type !== "private") {
+    return await isGroupAdmin(ctx);
+  }
+  // privado: precisa estar whitelisted (e opcionalmente admin do torneio)
+  const dmOk = await isDMWhitelisted(ctx);
+  if (!dmOk) return false;
+  if (tournament_id) {
+    const tidOk = await isTournamentAdmin(tournament_id, ctx.from.id);
+    return tidOk || dmOk;
+  }
+  return dmOk;
 }
 
-async function renderSelectKeyboard(ctx: any, selectedIds: string[]) {
-  // Recarrega a lista completa de jogadores (ordenada)
-  const { data: players } = await supa
-    .from("players")
-    .select("id,name")
-    .order("name", { ascending: true });
-
-  const rows = (players ?? []).map((p) => {
-    const checked = selectedIds.includes(p.id);
-    const label = `${checked ? "✅" : "⬜"} ${p.name}`;
-    return [Markup.button.callback(label, `toggle_${p.id}`)];
-  });
-
-  rows.push([Markup.button.callback("✅ Concluir seleção", "done_select")]);
-
-  // Atualiza SOMENTE o teclado da mesma mensagem
-  await ctx.editMessageReplyMarkup({ inline_keyboard: rows });
-}
-
+/* =========================================================================
+ * DB HELPERS
+ * ========================================================================= */
 async function getOrCreateChat(chat_id: number) {
   const { data } = await supa
     .from("telegram_chats")
@@ -201,15 +239,13 @@ async function getOrCreateChat(chat_id: number) {
     .eq("chat_id", chat_id)
     .maybeSingle();
   if (data) return data;
-  // default: pega 1º torneio como padrão se existir
+
+  // default: seta primeiro torneio, se existir
   const { data: t } = await supa.from("tournaments").select("id").limit(1);
   const tid = t?.[0]?.id ?? null;
   const { data: ins } = await supa
     .from("telegram_chats")
-    .insert({
-      chat_id,
-      tournament_id: tid,
-    })
+    .insert({ chat_id, tournament_id: tid })
     .select()
     .single();
   return ins!;
@@ -258,12 +294,153 @@ async function clearSession(chat_id: number, user_id: number) {
     .eq("user_id", user_id);
 }
 
-/** Comandos */
-bot.start(async (ctx) => {
-  const chat = await getOrCreateChat(ctx.chat.id);
+/* =========================================================================
+ * WIZARD HELPERS (FLOW)
+ * ========================================================================= */
+async function renderSelectKeyboard(ctx: any, selectedIds: string[]) {
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .order("name", { ascending: true });
+
+  const rows = (players ?? []).map((p) => {
+    const checked = selectedIds.includes(p.id);
+    const label = `${checked ? "✅" : "⬜"} ${p.name}`;
+    return [Markup.button.callback(label, `toggle_${p.id}`)];
+  });
+
+  rows.push([Markup.button.callback("✅ Concluir seleção", "done_select")]);
+  await ctx.editMessageReplyMarkup({ inline_keyboard: rows });
+}
+
+async function askNextPosition(
+  ctx: any,
+  _tournament_id: string,
+  selected: string[],
+  positions: Record<string, string>,
+  currentPos: number,
+) {
+  const already = new Set(Object.values(positions));
+  const remaining = selected.filter((id) => !already.has(id));
+  if (!remaining.length) return;
+
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .in("id", remaining)
+    .order("name");
+
+  const rows = (players ?? []).map((p) => [
+    Markup.button.callback(`${p.name}`, `pickpos_${currentPos}_${p.id}`),
+  ]);
+
+  await ctx.reply(`Quem ficou em *${currentPos}º*?`, {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard(rows),
+  });
+}
+
+async function askKnockoutsSmart(ctx: any) {
+  const chat_id = ctx.chat.id;
+  const user_id = ctx.from.id;
+
+  const { data: sess } = await supa
+    .from("telegram_sessions")
+    .select("*")
+    .eq("chat_id", chat_id)
+    .eq("user_id", user_id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!sess) return;
+
+  const selected: string[] = sess.selected_ids ?? [];
+  const positions: Record<string, string> = sess.positions_json ?? {};
+  const kos: Record<string, number> = sess.kos_json ?? {};
+
+  const N = selected.length;
+  const used = sumKos(kos);
+  const pool = Math.max(0, N - 1 - used);
+
+  const order = await currentOrderFromPositions(positions);
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .in("id", order);
+
+  const nameOf = (id: string) => players?.find((p) => p.id === id)?.name ?? "—";
+
+  const rows: any[] = order.map((pid) => {
+    const k = Number(kos[pid] ?? 0);
+    return [
+      Markup.button.callback("−", `ko_${pid}_minus`),
+      Markup.button.callback(`${nameOf(pid)}: ${k}`, "noop"),
+      Markup.button.callback(pool > 0 ? "+" : " ", `ko_${pid}_plus`),
+    ];
+  });
+
+  rows.push([
+    Markup.button.callback(`✅ Concluir (restam ${pool})`, "done_kos"),
+  ]);
+
   await ctx.reply(
-    `👋 Olá! Pronto para registrar partidas.\nTorneio atual: ${chat.tournament_id ?? "—"}\n\nComandos:\n/nova_partida – iniciar wizard\n/set_torneio <UUID>\n/ranking – link do ranking\n/partidas – link das partidas`,
+    `Ajuste as *almas* (KOs). Saldo total disponível: *${N - 1 - used}*`,
+    { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
   );
+}
+
+async function confirmSummary(ctx: any) {
+  const chat_id = ctx.chat.id;
+  const user_id = ctx.from.id;
+
+  const { data: sess } = await supa
+    .from("telegram_sessions")
+    .select("*")
+    .eq("chat_id", chat_id)
+    .eq("user_id", user_id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!sess) return;
+
+  const positions: Record<string, string> = sess.positions_json ?? {};
+  const kos: Record<string, number> = sess.kos_json ?? {};
+  const order = Object.keys(positions)
+    .map(Number)
+    .sort((a, b) => a - b);
+
+  const pids = order.map((pos) => positions[String(pos)]);
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .in("id", pids);
+
+  const nameOf = (id: string) => players?.find((p) => p.id === id)?.name ?? "—";
+
+  const lines = order
+    .map((pos) => {
+      const id = positions[String(pos)];
+      return `${pos}º  ${nameOf(id)}  (almas: ${kos[id] ?? 0})`;
+    })
+    .join("\n");
+
+  await ctx.reply(
+    `Confira a partida:\nData: ${new Date(sess.played_at).toLocaleDateString("pt-BR")}\n\n${lines}\n\nSalvar?`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback("✅ Confirmar", "confirm_save")],
+      [Markup.button.callback("❌ Cancelar", "cancel_save")],
+    ]),
+  );
+}
+
+/* =========================================================================
+ * COMMANDS
+ * ========================================================================= */
+bot.start(async (ctx) => {
+  // Teclado fixo + atalhos (e tenta fixar)
+  await showPersistentMenu(ctx);
 });
 
 bot.command("menu", async (ctx) => {
@@ -274,18 +451,21 @@ bot.command("set_torneio", async (ctx) => {
   const parts = (ctx.message as any).text.split(/\s+/);
   const tid = parts[1];
   if (!tid) return ctx.reply("Uso: /set_torneio <UUID-do-torneio>");
-  await supa.from("telegram_chats").upsert({
-    chat_id: ctx.chat.id,
-    tournament_id: tid,
-    updated_at: new Date().toISOString(),
+
+  await supa
+    .from("telegram_chats")
+    .upsert({
+      chat_id: ctx.chat.id,
+      tournament_id: tid,
+      updated_at: new Date().toISOString(),
+    });
+  await ctx.reply(`✅ Torneio definido: ${tid}`, {
+    reply_markup: mainReplyKeyboard(),
   });
-  ctx.reply(`✅ Torneio definido: ${tid}`);
 });
 
-// ====== COMANDO /ranking ======
 bot.command("ranking", async (ctx) => {
   try {
-    // Torneio padrão do chat
     const { data: chat, error: chatErr } = await supa
       .from("telegram_chats")
       .select("tournament_id")
@@ -305,30 +485,23 @@ bot.command("ranking", async (ctx) => {
       );
     }
 
-    // Busca ranking no Supabase (usa a função get_ranking criada no SQL)
     const { data, error } = await supa.rpc("get_ranking", {
       p_tournament_id: tid,
       p_limit: 15,
     });
-
     if (error) {
       console.error(error);
       return ctx.reply("❌ Erro ao carregar o ranking do torneio.");
     }
 
     const rows: RankRow[] = (data ?? []) as RankRow[];
-    if (rows.length === 0) {
-      return ctx.reply(
-        "🏁 Nenhuma partida registrada ainda para este torneio.",
-      );
-    }
+    if (!rows.length) return ctx.reply("🏁 Nenhuma partida registrada ainda.");
 
     const table = asMonospaceTable(rows);
     const base =
       process.env.PUBLIC_FRONTEND_URL ||
       "https://poker-ranking-finhane.vercel.app";
 
-    // Envia tabela monoespaçada com botão para abrir o site
     await ctx.replyWithMarkdown(table, {
       reply_markup: {
         inline_keyboard: [
@@ -337,12 +510,10 @@ bot.command("ranking", async (ctx) => {
       },
     });
 
-    // Resumo Top 3 (opcional)
     const top3 = rows
       .slice(0, 3)
       .map(
-        (r: RankRow) =>
-          `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
+        (r) => `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
       )
       .join("\n");
 
@@ -352,64 +523,149 @@ bot.command("ranking", async (ctx) => {
     await ctx.reply("⚠️ Falha ao obter ranking, tente novamente.");
   }
 });
+
 bot.command("partidas", (ctx) => {
   const base =
     process.env.PUBLIC_FRONTEND_URL ||
     "https://poker-ranking-finhane.vercel.app";
-  ctx.reply(`🎲 Partidas: ${base}/matches`);
+  ctx.reply(`🎲 Partidas: ${base}/matches`, {
+    reply_markup: mainReplyKeyboard(),
+  });
 });
 
 bot.command("nova_partida", async (ctx) => {
-  const chat = await getOrCreateChat(ctx.chat.id);
-  if (!chat.tournament_id) {
-    return ctx.reply("Defina o torneio com /set_torneio <UUID> antes.");
+  const { data: chat } = await supa
+    .from("telegram_chats")
+    .select("tournament_id")
+    .eq("chat_id", ctx.chat.id)
+    .maybeSingle();
+
+  const tid = chat?.tournament_id as string | undefined;
+  if (!tid) return ctx.reply("Defina o torneio com /set_torneio <UUID>.");
+  if (!(await canCreateMatch(ctx, tid))) {
+    return ctx.reply(
+      "🚫 Você não tem permissão para criar partidas neste chat.",
+    );
   }
 
-  // Carrega jogadores (alfabético)
   const { data: players, error } = await supa
     .from("players")
     .select("id,name")
     .order("name", { ascending: true });
-
   if (error) return ctx.reply("Erro ao carregar jogadores.");
   if (!players?.length) return ctx.reply("Nenhum jogador cadastrado.");
 
-  // inicia sessão
   await setSession(ctx.chat.id, ctx.from.id, {
     state: "selecting_players",
-    tournament_id: chat.tournament_id,
+    tournament_id: tid,
     selected_ids: [],
     positions_json: {},
     kos_json: {},
     played_at: new Date().toISOString(),
   });
 
-  // teclado com todos os jogadores (toggle)
   const rows = players.map((p) => [
     Markup.button.callback(`⬜ ${p.name}`, `toggle_${p.id}`),
   ]);
   rows.push([Markup.button.callback("✅ Concluir seleção", "done_select")]);
+
   await ctx.reply(
     "Selecione os participantes (toque para alternar). Depois clique em ✅ Concluir seleção.",
     Markup.inlineKeyboard(rows),
   );
 });
 
+/* =========================================================================
+ * HEARS (REPLY KEYBOARD BUTTONS)
+ * ========================================================================= */
+async function openNewMatchWizard(ctx: any) {
+  const { data: chat } = await supa
+    .from("telegram_chats")
+    .select("tournament_id")
+    .eq("chat_id", ctx.chat.id)
+    .maybeSingle();
+
+  const tid = chat?.tournament_id as string | undefined;
+  if (!tid) return ctx.reply("Defina o torneio com /set_torneio <UUID> antes.");
+  if (!(await canCreateMatch(ctx, tid))) {
+    return ctx.reply(
+      "🚫 Você não tem permissão para criar partidas neste chat.",
+    );
+  }
+
+  const { data: players, error } = await supa
+    .from("players")
+    .select("id,name")
+    .order("name", { ascending: true });
+  if (error) return ctx.reply("Erro ao carregar jogadores.");
+  if (!players?.length) return ctx.reply("Nenhum jogador cadastrado.");
+
+  await setSession(ctx.chat.id, ctx.from.id, {
+    state: "selecting_players",
+    tournament_id: tid,
+    selected_ids: [],
+    positions_json: {},
+    kos_json: {},
+    played_at: new Date().toISOString(),
+  });
+
+  await ctx.reply(
+    "Selecione os participantes (toque para alternar). Depois clique em ✅ Concluir seleção.",
+    { reply_markup: { inline_keyboard: [] } },
+  );
+  await renderSelectKeyboard(ctx, []);
+}
+
+bot.hears("➕ Nova Partida", async (ctx) => {
+  try {
+    await openNewMatchWizard(ctx);
+  } catch (e) {
+    console.error("hears newmatch", e);
+    await ctx.reply("Falha ao iniciar o registro de partida.");
+  }
+});
+
+bot.hears("🏆 Ranking", async (ctx) => {
+  try {
+    await sendRankingMessage(ctx);
+  } catch (e) {
+    console.error("hears ranking", e);
+    await ctx.reply("Falha ao carregar ranking.");
+  }
+});
+
+bot.hears("🎲 Partidas", async (ctx) => {
+  const base =
+    process.env.PUBLIC_FRONTEND_URL ||
+    "https://poker-ranking-finhane.vercel.app";
+  await ctx.reply("🎲 Últimas partidas:", {
+    reply_markup: {
+      inline_keyboard: [[{ text: "📄 Abrir página", url: `${base}/matches` }]],
+    },
+  });
+});
+
+bot.hears("⚙️ Trocar Torneio", async (ctx) => {
+  await ctx.reply("Envie: `/set_torneio <UUID>`", { parse_mode: "Markdown" });
+});
+
+/* =========================================================================
+ * CALLBACKS (INLINE KEYBOARD)
+ * ========================================================================= */
 bot.on("callback_query", async (ctx) => {
   const data = (ctx.callbackQuery as any).data as string;
   const chat_id = ctx.chat!.id;
   const user_id = ctx.from!.id;
 
-  // ===== atalhos do /menu =====
+  // atalhos do /menu
   if (data === "menu_newmatch") {
-    // mesmo fluxo do /nova_partida
     const { chatId, userId } = getSafeIds(ctx);
     const chat = await getOrCreateChat(chatId);
+
     if (!chat.tournament_id) {
       await ctx.answerCbQuery();
       return ctx.reply("Defina o torneio com /set_torneio <UUID> antes.");
     }
-    // carrega jogadores
     const { data: players, error } = await supa
       .from("players")
       .select("id,name")
@@ -433,12 +689,11 @@ bot.on("callback_query", async (ctx) => {
     });
 
     await ctx.answerCbQuery();
-    // renderiza a lista com checkboxes (reutiliza helper que atualiza ✅/⬜)
     await ctx.reply(
       "Selecione os participantes (toque para alternar). Depois clique em ✅ Concluir seleção.",
-      { reply_markup: { inline_keyboard: [] } }, // placeholder; logo abaixo renderizamos o teclado
+      { reply_markup: { inline_keyboard: [] } },
     );
-    await renderSelectKeyboard(ctx, []); // << depende do helper já enviado
+    await renderSelectKeyboard(ctx, []);
     return;
   }
 
@@ -471,9 +726,8 @@ bot.on("callback_query", async (ctx) => {
     );
     return;
   }
-  // ===== fim dos atalhos do /menu =====
 
-  // carrega sessão
+  // fluxo do wizard
   const { data: sess } = await supa
     .from("telegram_sessions")
     .select("*")
@@ -488,7 +742,7 @@ bot.on("callback_query", async (ctx) => {
     return ctx.reply("Sessão não encontrada. Use /nova_partida para iniciar.");
   }
 
-  // Seleção de participantes
+  // seleção de participantes
   if (sess.state === "selecting_players") {
     if (data === "done_select") {
       const selected: string[] = sess.selected_ids ?? [];
@@ -496,8 +750,6 @@ bot.on("callback_query", async (ctx) => {
         await ctx.answerCbQuery("Selecione ao menos 2 participantes");
         return;
       }
-      // Próximo estado: ordenar colocações
-      await setSession(chat_id, user_id, { state: "ordering_positions" });
       await setSession(chat_id, user_id, { state: "ordering_positions" });
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
 
@@ -511,19 +763,17 @@ bot.on("callback_query", async (ctx) => {
       let selected: string[] = Array.isArray(sess.selected_ids)
         ? [...sess.selected_ids]
         : [];
-      if (selected.includes(pid)) {
-        selected = selected.filter((x) => x !== pid);
-      } else {
-        selected.push(pid);
-      }
+      if (selected.includes(pid)) selected = selected.filter((x) => x !== pid);
+      else selected.push(pid);
+
       await setSession(chat_id, user_id, { selected_ids: selected });
       await ctx.answerCbQuery(`Selecionados: ${selected.length}`);
-      await renderSelectKeyboard(ctx, selected); // <<<<<<<<<< atualiza os checkboxes
+      await renderSelectKeyboard(ctx, selected);
       return;
     }
   }
 
-  // Ordenação de posições
+  // ordenação de posições
   if (sess.state === "ordering_positions") {
     if (data.startsWith("pickpos_")) {
       const [_, posStr, pickedId] = data.split("_");
@@ -534,19 +784,17 @@ bot.on("callback_query", async (ctx) => {
       const selected: string[] = sess.selected_ids ?? [];
       await setSession(chat_id, user_id, { positions_json: positions });
 
-      // calcula a próxima posição conforme a direção
       const nextPos = ORDER_DESC ? pos - 1 : pos + 1;
       const finished = ORDER_DESC ? nextPos < 1 : nextPos > selected.length;
 
       if (finished) {
-        // terminou a ordenação ⇒ iniciar KOs inteligentes
         const kos: Record<string, number> = {};
         selected.forEach((id) => (kos[id] = 0));
         await setSession(chat_id, user_id, {
           state: "setting_knockouts",
           kos_json: kos,
         });
-        await askKnockoutsSmart(ctx); // <<<<<<<< novo helper (abaixo)
+        await askKnockoutsSmart(ctx);
       } else {
         await askNextPosition(
           ctx,
@@ -560,7 +808,7 @@ bot.on("callback_query", async (ctx) => {
     }
   }
 
-  // Ajuste de “almas”
+  // ajuste de almas (KOs)
   if (sess.state === "setting_knockouts") {
     if (data.startsWith("ko_")) {
       const [_, pid, op] = data.split("_"); // ko_<playerId>_plus|minus
@@ -583,42 +831,27 @@ bot.on("callback_query", async (ctx) => {
 
       kos[pid] = next;
       await setSession(chat_id, user_id, { kos_json: kos });
-
-      // Re-renderiza o teclado com o novo saldo
       await askKnockoutsSmart(ctx);
       return;
     }
 
     if (data === "done_kos") {
-      // Validar: não precisa zerar 100%, mas normalmente soma = N-1
-      // Se quiser forçar, descomente abaixo:
-      /*
-    const selected: string[] = sess.selected_ids ?? [];
-    const N = selected.length;
-    const kos = sess.kos_json || {};
-    if (sumKos(kos) !== (N - 1)) {
-      await ctx.answerCbQuery();
-      return ctx.reply(`A soma das almas deve ser exatamente ${N-1}. Ajuste antes de concluir.`);
-    }
-    */
-
       await setSession(chat_id, user_id, { state: "confirming" });
       await confirmSummary(ctx);
       return;
     }
   }
 
-  // Confirmação final
+  // confirmação final
   if (sess.state === "confirming") {
     if (data === "confirm_save") {
       const request_id = randomUUID();
-      // monta payload
+
       const selected: string[] = sess.selected_ids ?? [];
       const positions: Record<string, string> = sess.positions_json ?? {};
       const kos: Record<string, number> = sess.kos_json ?? {};
       const played_at: string = sess.played_at;
 
-      // array ordenado por posição
       const rows = Object.keys(positions)
         .map((k) => ({
           position: Number(k),
@@ -627,12 +860,12 @@ bot.on("callback_query", async (ctx) => {
         }))
         .sort((a, b) => a.position - b.position);
 
-      // salva via RPC
       const { data: chat } = await supa
         .from("telegram_chats")
         .select("*")
         .eq("chat_id", chat_id)
         .single();
+
       const { data, error } = await supa.rpc("create_match_with_participants", {
         p_tournament_id: chat!.tournament_id,
         p_played_at: played_at,
@@ -649,15 +882,19 @@ bot.on("callback_query", async (ctx) => {
       const base =
         process.env.PUBLIC_FRONTEND_URL ||
         "https://poker-ranking-finhane.vercel.app";
+
       await clearSession(chat_id, user_id);
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
       await ctx.reply(`✅ Partida registrada!\n🔗 ${base}/matches/${matchId}`);
+      await showPersistentMenu(ctx); // reexibe menu
       return;
     }
+
     if (data === "cancel_save") {
       await clearSession(chat_id, user_id);
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
       await ctx.reply("Operação cancelada.");
+      await showPersistentMenu(ctx); // reexibe menu
       return;
     }
   }
@@ -665,109 +902,10 @@ bot.on("callback_query", async (ctx) => {
   await ctx.answerCbQuery(); // fallback
 });
 
-/** Helpers de UI do wizard */
-async function askNextPosition(
-  ctx: any,
-  tournament_id: string,
-  selected: string[],
-  positions: Record<string, string>,
-  currentPos: number,
-) {
-  // quando ORDER_DESC=true, currentPos começa em selected.length e vai diminuindo até 1
-  // quando ORDER_DESC=false, currentPos começa em 1 e vai subindo até selected.length
-
-  // Descobre quem ainda não foi escolhido
-  const already = new Set(Object.values(positions));
-  const remaining = selected.filter((id) => !already.has(id));
-
-  if (!remaining.length) return;
-
-  // Carrega nomes dos "remaining"
-  const { data: players } = await supa
-    .from("players")
-    .select("id,name")
-    .in("id", remaining)
-    .order("name");
-
-  const rows = (players ?? []).map((p) => [
-    Markup.button.callback(`${p.name}`, `pickpos_${currentPos}_${p.id}`),
-  ]);
-
-  await ctx.reply(`Quem ficou em *${currentPos}º*?`, {
-    parse_mode: "Markdown",
-    ...Markup.inlineKeyboard(rows),
-  });
-}
-
-async function askKnockouts(
-  ctx: any,
-  positions: Record<string, string>,
-  kos: Record<string, number>,
-) {
-  const playerIds = Object.values(positions);
-  const { data: players } = await supa
-    .from("players")
-    .select("id,name")
-    .in("id", playerIds)
-    .order("name");
-  const rows = (players ?? []).map((p) => [
-    Markup.button.callback(`−`, `ko_${p.id}_minus`),
-    Markup.button.callback(`${p.name}: ${kos[p.id] ?? 0}`, `noop`),
-    Markup.button.callback(`+`, `ko_${p.id}_plus`),
-  ]);
-  rows.push([Markup.button.callback("✅ Concluir", "done_kos")]);
-  await ctx.reply("Ajuste as *almas* (KOs):", {
-    parse_mode: "Markdown",
-    ...Markup.inlineKeyboard(rows),
-  });
-}
-
-async function confirmSummary(ctx: any) {
-  const chat_id = ctx.chat.id,
-    user_id = ctx.from.id;
-  const { data: sess } = await supa
-    .from("telegram_sessions")
-    .select("*")
-    .eq("chat_id", chat_id)
-    .eq("user_id", user_id)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!sess) return;
-
-  const positions: Record<string, string> = sess.positions_json ?? {};
-  const kos: Record<string, number> = sess.kos_json ?? {};
-  const order = Object.keys(positions)
-    .map(Number)
-    .sort((a, b) => a - b);
-
-  // carrega nomes
-  const pids = order.map((pos) => positions[String(pos)]);
-  const { data: players } = await supa
-    .from("players")
-    .select("id,name")
-    .in("id", pids);
-  const nameOf = (id: string) => players?.find((p) => p.id === id)?.name ?? "—";
-
-  const lines = order
-    .map((pos) => {
-      const id = positions[String(pos)];
-      return `${pos}º  ${nameOf(id)}  (almas: ${kos[id] ?? 0})`;
-    })
-    .join("\n");
-
-  await ctx.reply(
-    `Confira a partida:\nData: ${new Date(sess.played_at).toLocaleDateString("pt-BR")}\n\n${lines}\n\nSalvar?`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("✅ Confirmar", "confirm_save")],
-      [Markup.button.callback("❌ Cancelar", "cancel_save")],
-    ]),
-  );
-}
-
+/* =========================================================================
+ * RANKING MESSAGE (reuso por hears/callback)
+ * ========================================================================= */
 async function sendRankingMessage(ctx: any) {
-  // torneio padrão
   const { data: chat } = await supa
     .from("telegram_chats")
     .select("tournament_id")
@@ -791,7 +929,7 @@ async function sendRankingMessage(ctx: any) {
   }
 
   const rows: RankRow[] = (data ?? []) as RankRow[];
-  if (rows.length === 0) return ctx.reply("🏁 Sem partidas ainda.");
+  if (!rows.length) return ctx.reply("🏁 Sem partidas ainda.");
 
   const table = asMonospaceTable(rows);
   const base =
@@ -806,15 +944,36 @@ async function sendRankingMessage(ctx: any) {
 
   const top3 = rows
     .slice(0, 3)
-    .map(
-      (r: RankRow) =>
-        `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
-    )
+    .map((r) => `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`)
     .join("\n");
+
   await ctx.reply(`🏆 *Top 3*\n${top3}`, { parse_mode: "Markdown" });
 }
 
-/** Webhook handler (Next.js) */
+/* =========================================================================
+ * QUALITY OF LIFE: reexibir teclado em textos genéricos
+ * ========================================================================= */
+bot.on("text", async (ctx, next) => {
+  const text = (ctx.message as any).text ?? "";
+  const known = [
+    "➕ Nova Partida",
+    "🏆 Ranking",
+    "🎲 Partidas",
+    "⚙️ Trocar Torneio",
+  ];
+
+  // Se texto não for botão nem comando, sugere usar menu
+  if (!known.includes(text) && !text.startsWith("/")) {
+    await ctx.reply("Use o menu abaixo para navegar 👇", {
+      reply_markup: mainReplyKeyboard(),
+    });
+  }
+  return next();
+});
+
+/* =========================================================================
+ * NEXT.JS HANDLERS (WEBHOOK)
+ * ========================================================================= */
 export async function POST(req: NextRequest) {
   try {
     await ensureCommands();
@@ -827,7 +986,6 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Opcional: sanity check
 export async function GET() {
   await ensureCommands();
   return new Response("Telegram webhook ok");
