@@ -440,6 +440,9 @@ async function confirmSummary(ctx: any) {
  * COMMANDS
  * ========================================================================= */
 bot.start(async (ctx) => {
+  await ctx.reply(
+    `👋 Olá, ${ctx.from.first_name}! Seu Telegram ID é: ${ctx.from.id}`,
+  );
   // Teclado fixo + atalhos (e tenta fixar)
   await showPersistentMenu(ctx);
 });
