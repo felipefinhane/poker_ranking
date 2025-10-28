@@ -22,6 +22,66 @@ const ORDER_DESC = true; // true = pedir do último -> primeiro
 
 /** Helpers */
 
+function medal(pos: number) {
+  if (pos === 1) return "🥇";
+  if (pos === 2) return "🥈";
+  if (pos === 3) return "🥉";
+  return `${pos}º`;
+}
+
+function padRight(s: string, n: number) {
+  if (s.length >= n) return s;
+  return s + " ".repeat(n - s.length);
+}
+
+function padLeft(s: string, n: number) {
+  if (s.length >= n) return s;
+  return " ".repeat(n - s.length) + s;
+}
+
+function asMonospaceTable(
+  rows: Array<{
+    posicao: number;
+    player_name: string;
+    total_knockouts: number;
+    total_points: number;
+  }>,
+) {
+  const nameWidth = Math.max(6, ...rows.map((r) => r.player_name.length));
+  const header = `POS  ${padRight("NOME", nameWidth)}  ALMA  PTS`;
+  const line = "─".repeat(header.length);
+
+  const body = rows
+    .map((r) => {
+      const pos = padRight(medal(r.posicao), 3);
+      const name = padRight(r.player_name, nameWidth);
+      const alma = padLeft(String(r.total_knockouts), 4);
+      const pts = padLeft(String(r.total_points), 3);
+      return `${pos}  ${name}  ${alma}  ${pts}`;
+    })
+    .join("\n");
+
+  return "```\n" + header + "\n" + line + "\n" + body + "\n```";
+}
+
+async function ensureCommands() {
+  try {
+    await bot.telegram.setMyCommands([
+      { command: "start", description: "Ajuda / status" },
+      { command: "set_torneio", description: "Definir torneio padrão (UUID)" },
+      {
+        command: "nova_partida",
+        description: "Registrar nova partida (wizard)",
+      },
+      { command: "partidas", description: "Últimas partidas" },
+      { command: "ranking", description: "Ver ranking do torneio" },
+      // { command: 'add_player', description: 'Cadastrar jogador (admin)' }, // opcional futuro
+    ]);
+  } catch (e) {
+    console.error("setMyCommands error", e);
+  }
+}
+
 function sumKos(kos: Record<string, number>): number {
   return Object.values(kos || {}).reduce((a, b) => a + Number(b || 0), 0);
 }
@@ -188,11 +248,68 @@ bot.command("set_torneio", async (ctx) => {
   ctx.reply(`✅ Torneio definido: ${tid}`);
 });
 
-bot.command("ranking", (ctx) => {
-  const base =
-    process.env.PUBLIC_FRONTEND_URL ||
-    "https://poker-ranking-finhane.vercel.app";
-  ctx.reply(`🏆 Ranking: ${base}/`);
+bot.command("ranking", async (ctx) => {
+  try {
+    // Busca o torneio padrão do chat
+    const { data: chat } = await supa
+      .from("telegram_chats")
+      .select("tournament_id")
+      .eq("chat_id", ctx.chat.id)
+      .maybeSingle();
+
+    const tid = chat?.tournament_id;
+    if (!tid) {
+      return ctx.reply(
+        "⚠️ Antes de visualizar o ranking, defina o torneio com:\n\n`/set_torneio <UUID>`",
+        { parse_mode: "Markdown" },
+      );
+    }
+
+    // Chama a função do Supabase
+    const { data, error } = await supa.rpc("get_ranking", {
+      p_tournament_id: tid,
+      p_limit: 15,
+    });
+    if (error) {
+      console.error(error);
+      return ctx.reply("❌ Erro ao carregar o ranking do torneio.");
+    }
+
+    if (!data || data.length === 0) {
+      return ctx.reply(
+        "🏁 Nenhuma partida registrada ainda para este torneio.",
+      );
+    }
+
+    const table = asMonospaceTable(data);
+
+    // URL pública do seu site
+    const base =
+      process.env.PUBLIC_FRONTEND_URL ||
+      "https://poker-ranking-finhane.vercel.app";
+
+    // Envia tabela formatada + botão
+    await ctx.replyWithMarkdown(table, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🌐 Ver Ranking Completo", url: `${base}/` }],
+        ],
+      },
+    });
+
+    // Top 3 resumo
+    const top3 = data
+      .slice(0, 3)
+      .map(
+        (r) => `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
+      )
+      .join("\n");
+
+    await ctx.reply(`🏆 *Top 3*\n${top3}`, { parse_mode: "Markdown" });
+  } catch (e) {
+    console.error(e);
+    await ctx.reply("⚠️ Falha ao obter ranking, tente novamente.");
+  }
 });
 bot.command("partidas", (ctx) => {
   const base =
@@ -538,6 +655,7 @@ async function confirmSummary(ctx: any) {
 /** Webhook handler (Next.js) */
 export async function POST(req: NextRequest) {
   try {
+    await ensureCommands();
     const body = await req.json();
     await bot.handleUpdate(body);
     return new Response("ok");
@@ -549,5 +667,6 @@ export async function POST(req: NextRequest) {
 
 // Opcional: sanity check
 export async function GET() {
+  await ensureCommands();
   return new Response("Telegram webhook ok");
 }
