@@ -18,8 +18,92 @@ const supa = createClient(SUPA_URL, SUPA_SVC, {
   auth: { persistSession: false },
 });
 const bot = new Telegraf(BOT_TOKEN);
+const ORDER_DESC = true; // true = pedir do último -> primeiro
 
 /** Helpers */
+
+function sumKos(kos: Record<string, number>): number {
+  return Object.values(kos || {}).reduce((a, b) => a + Number(b || 0), 0);
+}
+
+async function currentOrderFromPositions(positions: Record<string, string>) {
+  const order = Object.keys(positions)
+    .map((k) => Number(k))
+    .sort((a, b) => a - b)
+    .map((k) => positions[String(k)]);
+  return order; // array de player_ids ordenado pela colocação (1..n)
+}
+
+async function askKnockoutsSmart(ctx: any) {
+  const chat_id = ctx.chat.id,
+    user_id = ctx.from.id;
+
+  const { data: sess } = await supa
+    .from("telegram_sessions")
+    .select("*")
+    .eq("chat_id", chat_id)
+    .eq("user_id", user_id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!sess) return;
+
+  const selected: string[] = sess.selected_ids ?? [];
+  const positions: Record<string, string> = sess.positions_json ?? {};
+  const kos: Record<string, number> = sess.kos_json ?? {};
+
+  const N = selected.length;
+  const POOL = Math.max(0, N - 1 - sumKos(kos)); // saldo remanescente
+
+  // monta teclas: uma linha por jogador, com - [nome: K] +
+  const order = await currentOrderFromPositions(positions);
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .in("id", order);
+  const nameOf = (id: string) => players?.find((p) => p.id === id)?.name ?? "—";
+
+  const rows: any[] = order.map((pid) => {
+    const k = Number(kos[pid] ?? 0);
+    // desabilitar + quando POOL=0; desabilitar - quando k=0
+    return [
+      Markup.button.callback("−", `ko_${pid}_minus`),
+      Markup.button.callback(`${nameOf(pid)}: ${k}`, "noop"),
+      Markup.button.callback(POOL > 0 ? "+" : " ", `ko_${pid}_plus`),
+    ];
+  });
+
+  // mostrar o saldo remanescente e botões finais
+  rows.push([
+    Markup.button.callback(`✅ Concluir (restam ${POOL})`, "done_kos"),
+  ]);
+
+  await ctx.reply(
+    `Ajuste as *almas* (KOs). Saldo total disponível: *${N - 1 - sumKos(kos)}*`,
+    { parse_mode: "Markdown", ...Markup.inlineKeyboard(rows) },
+  );
+}
+
+async function renderSelectKeyboard(ctx: any, selectedIds: string[]) {
+  // Recarrega a lista completa de jogadores (ordenada)
+  const { data: players } = await supa
+    .from("players")
+    .select("id,name")
+    .order("name", { ascending: true });
+
+  const rows = (players ?? []).map((p) => {
+    const checked = selectedIds.includes(p.id);
+    const label = `${checked ? "✅" : "⬜"} ${p.name}`;
+    return [Markup.button.callback(label, `toggle_${p.id}`)];
+  });
+
+  rows.push([Markup.button.callback("✅ Concluir seleção", "done_select")]);
+
+  // Atualiza SOMENTE o teclado da mesma mensagem
+  await ctx.editMessageReplyMarkup({ inline_keyboard: rows });
+}
+
 async function getOrCreateChat(chat_id: number) {
   const { data } = await supa
     .from("telegram_chats")
@@ -183,8 +267,11 @@ bot.on("callback_query", async (ctx) => {
       }
       // Próximo estado: ordenar colocações
       await setSession(chat_id, user_id, { state: "ordering_positions" });
+      await setSession(chat_id, user_id, { state: "ordering_positions" });
       await ctx.editMessageReplyMarkup({ inline_keyboard: [] });
-      await askNextPosition(ctx, sess.tournament_id, selected, {}, 1);
+
+      const startPos = ORDER_DESC ? selected.length : 1;
+      await askNextPosition(ctx, sess.tournament_id, selected, {}, startPos);
       return;
     }
 
@@ -200,6 +287,7 @@ bot.on("callback_query", async (ctx) => {
       }
       await setSession(chat_id, user_id, { selected_ids: selected });
       await ctx.answerCbQuery(`Selecionados: ${selected.length}`);
+      await renderSelectKeyboard(ctx, selected); // <<<<<<<<<< atualiza os checkboxes
       return;
     }
   }
@@ -212,21 +300,22 @@ bot.on("callback_query", async (ctx) => {
       const positions = { ...(sess.positions_json || {}) };
       positions[pos] = pickedId;
 
-      // próxima posição
       const selected: string[] = sess.selected_ids ?? [];
-      const nextPos = pos + 1;
-
       await setSession(chat_id, user_id, { positions_json: positions });
 
-      if (nextPos > selected.length) {
-        // terminou ordenação → inicia KOs default 0 e vai para confirmar
+      // calcula a próxima posição conforme a direção
+      const nextPos = ORDER_DESC ? pos - 1 : pos + 1;
+      const finished = ORDER_DESC ? nextPos < 1 : nextPos > selected.length;
+
+      if (finished) {
+        // terminou a ordenação ⇒ iniciar KOs inteligentes
         const kos: Record<string, number> = {};
         selected.forEach((id) => (kos[id] = 0));
         await setSession(chat_id, user_id, {
           state: "setting_knockouts",
           kos_json: kos,
         });
-        await askKnockouts(ctx, positions, kos);
+        await askKnockoutsSmart(ctx); // <<<<<<<< novo helper (abaixo)
       } else {
         await askNextPosition(
           ctx,
@@ -245,13 +334,43 @@ bot.on("callback_query", async (ctx) => {
     if (data.startsWith("ko_")) {
       const [_, pid, op] = data.split("_"); // ko_<playerId>_plus|minus
       const kos = { ...(sess.kos_json || {}) };
+      const selected: string[] = sess.selected_ids ?? [];
+      const N = selected.length;
+      const used = sumKos(kos);
+      const remaining = Math.max(0, N - 1 - used);
+
       const current = Number(kos[pid] ?? 0);
-      kos[pid] = Math.max(0, current + (op === "plus" ? 1 : -1));
+      let next = current;
+
+      if (op === "plus") {
+        if (remaining > 0) next = current + 1;
+        else await ctx.answerCbQuery("Sem saldo de almas restante");
+      } else if (op === "minus") {
+        if (current > 0) next = current - 1;
+        else await ctx.answerCbQuery("Não pode ficar negativo");
+      }
+
+      kos[pid] = next;
       await setSession(chat_id, user_id, { kos_json: kos });
-      await ctx.answerCbQuery(`Almas: ${kos[pid]}`);
+
+      // Re-renderiza o teclado com o novo saldo
+      await askKnockoutsSmart(ctx);
       return;
     }
+
     if (data === "done_kos") {
+      // Validar: não precisa zerar 100%, mas normalmente soma = N-1
+      // Se quiser forçar, descomente abaixo:
+      /*
+    const selected: string[] = sess.selected_ids ?? [];
+    const N = selected.length;
+    const kos = sess.kos_json || {};
+    if (sumKos(kos) !== (N - 1)) {
+      await ctx.answerCbQuery();
+      return ctx.reply(`A soma das almas deve ser exatamente ${N-1}. Ajuste antes de concluir.`);
+    }
+    */
+
       await setSession(chat_id, user_id, { state: "confirming" });
       await confirmSummary(ctx);
       return;
@@ -321,23 +440,29 @@ async function askNextPosition(
   tournament_id: string,
   selected: string[],
   positions: Record<string, string>,
-  pos: number,
+  currentPos: number,
 ) {
-  // lista de ainda não escolhidos
-  const remaining = selected.filter(
-    (id) => !Object.values(positions).includes(id),
-  );
+  // quando ORDER_DESC=true, currentPos começa em selected.length e vai diminuindo até 1
+  // quando ORDER_DESC=false, currentPos começa em 1 e vai subindo até selected.length
+
+  // Descobre quem ainda não foi escolhido
+  const already = new Set(Object.values(positions));
+  const remaining = selected.filter((id) => !already.has(id));
+
   if (!remaining.length) return;
 
-  // carrega nomes
+  // Carrega nomes dos "remaining"
   const { data: players } = await supa
     .from("players")
     .select("id,name")
-    .in("id", remaining);
+    .in("id", remaining)
+    .order("name");
+
   const rows = (players ?? []).map((p) => [
-    Markup.button.callback(`${p.name}`, `pickpos_${pos}_${p.id}`),
+    Markup.button.callback(`${p.name}`, `pickpos_${currentPos}_${p.id}`),
   ]);
-  await ctx.reply(`Quem ficou em **${pos}º**?`, {
+
+  await ctx.reply(`Quem ficou em *${currentPos}º*?`, {
     parse_mode: "Markdown",
     ...Markup.inlineKeyboard(rows),
   });
