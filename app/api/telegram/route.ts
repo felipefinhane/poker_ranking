@@ -20,8 +20,33 @@ const supa = createClient(SUPA_URL, SUPA_SVC, {
 const bot = new Telegraf(BOT_TOKEN);
 const ORDER_DESC = true; // true = pedir do último -> primeiro
 
-/** Helpers */
+type RankRow = {
+  posicao: number;
+  player_name: string;
+  total_knockouts: number;
+  total_points: number;
+};
 
+// HELPERS ======
+function mainMenuKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "➕ Nova Partida", callback_data: "menu_newmatch" }],
+      [
+        { text: "🏆 Ranking", callback_data: "menu_ranking" },
+        { text: "🎲 Partidas", callback_data: "menu_partidas" },
+      ],
+      [{ text: "⚙️ Trocar Torneio", callback_data: "menu_set_tournament" }],
+    ],
+  } as const;
+}
+
+async function showMainMenu(ctx: any) {
+  await ctx.reply("📋 *Menu principal*", {
+    parse_mode: "Markdown",
+    reply_markup: mainMenuKeyboard(),
+  });
+}
 function medal(pos: number) {
   if (pos === 1) return "🥇";
   if (pos === 2) return "🥈";
@@ -39,14 +64,7 @@ function padLeft(s: string, n: number) {
   return " ".repeat(n - s.length) + s;
 }
 
-function asMonospaceTable(
-  rows: Array<{
-    posicao: number;
-    player_name: string;
-    total_knockouts: number;
-    total_points: number;
-  }>,
-) {
+function asMonospaceTable(rows: RankRow[]) {
   const nameWidth = Math.max(6, ...rows.map((r) => r.player_name.length));
   const header = `POS  ${padRight("NOME", nameWidth)}  ALMA  PTS`;
   const line = "─".repeat(header.length);
@@ -68,6 +86,7 @@ async function ensureCommands() {
   try {
     await bot.telegram.setMyCommands([
       { command: "start", description: "Ajuda / status" },
+      { command: "menu", description: "Abrir menu principal" }, // <<<<<
       { command: "set_torneio", description: "Definir torneio padrão (UUID)" },
       {
         command: "nova_partida",
@@ -75,7 +94,6 @@ async function ensureCommands() {
       },
       { command: "partidas", description: "Últimas partidas" },
       { command: "ranking", description: "Ver ranking do torneio" },
-      // { command: 'add_player', description: 'Cadastrar jogador (admin)' }, // opcional futuro
     ]);
   } catch (e) {
     console.error("setMyCommands error", e);
@@ -236,6 +254,10 @@ bot.start(async (ctx) => {
   );
 });
 
+bot.command("menu", async (ctx) => {
+  await showMainMenu(ctx);
+});
+
 bot.command("set_torneio", async (ctx) => {
   const parts = (ctx.message as any).text.split(/\s+/);
   const tid = parts[1];
@@ -248,16 +270,22 @@ bot.command("set_torneio", async (ctx) => {
   ctx.reply(`✅ Torneio definido: ${tid}`);
 });
 
+// ====== COMANDO /ranking ======
 bot.command("ranking", async (ctx) => {
   try {
-    // Busca o torneio padrão do chat
-    const { data: chat } = await supa
+    // Torneio padrão do chat
+    const { data: chat, error: chatErr } = await supa
       .from("telegram_chats")
       .select("tournament_id")
       .eq("chat_id", ctx.chat.id)
       .maybeSingle();
 
-    const tid = chat?.tournament_id;
+    if (chatErr) {
+      console.error(chatErr);
+      return ctx.reply("❌ Erro ao determinar o torneio do chat.");
+    }
+
+    const tid = chat?.tournament_id as string | undefined;
     if (!tid) {
       return ctx.reply(
         "⚠️ Antes de visualizar o ranking, defina o torneio com:\n\n`/set_torneio <UUID>`",
@@ -265,30 +293,30 @@ bot.command("ranking", async (ctx) => {
       );
     }
 
-    // Chama a função do Supabase
+    // Busca ranking no Supabase (usa a função get_ranking criada no SQL)
     const { data, error } = await supa.rpc("get_ranking", {
       p_tournament_id: tid,
       p_limit: 15,
     });
+
     if (error) {
       console.error(error);
       return ctx.reply("❌ Erro ao carregar o ranking do torneio.");
     }
 
-    if (!data || data.length === 0) {
+    const rows: RankRow[] = (data ?? []) as RankRow[];
+    if (rows.length === 0) {
       return ctx.reply(
         "🏁 Nenhuma partida registrada ainda para este torneio.",
       );
     }
 
-    const table = asMonospaceTable(data);
-
-    // URL pública do seu site
+    const table = asMonospaceTable(rows);
     const base =
       process.env.PUBLIC_FRONTEND_URL ||
       "https://poker-ranking-finhane.vercel.app";
 
-    // Envia tabela formatada + botão
+    // Envia tabela monoespaçada com botão para abrir o site
     await ctx.replyWithMarkdown(table, {
       reply_markup: {
         inline_keyboard: [
@@ -297,11 +325,12 @@ bot.command("ranking", async (ctx) => {
       },
     });
 
-    // Top 3 resumo
-    const top3 = data
+    // Resumo Top 3 (opcional)
+    const top3 = rows
       .slice(0, 3)
       .map(
-        (r) => `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
+        (r: RankRow) =>
+          `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
       )
       .join("\n");
 
@@ -358,6 +387,78 @@ bot.on("callback_query", async (ctx) => {
   const data = (ctx.callbackQuery as any).data as string;
   const chat_id = ctx.chat!.id;
   const user_id = ctx.from!.id;
+
+  // ===== atalhos do /menu =====
+  if (data === "menu_newmatch") {
+    // mesmo fluxo do /nova_partida
+    const chat = await getOrCreateChat(ctx.chat.id);
+    if (!chat.tournament_id) {
+      await ctx.answerCbQuery();
+      return ctx.reply("Defina o torneio com /set_torneio <UUID> antes.");
+    }
+    // carrega jogadores
+    const { data: players, error } = await supa
+      .from("players")
+      .select("id,name")
+      .order("name", { ascending: true });
+    if (error) {
+      await ctx.answerCbQuery();
+      return ctx.reply("Erro ao carregar jogadores.");
+    }
+    if (!players?.length) {
+      await ctx.answerCbQuery();
+      return ctx.reply("Nenhum jogador cadastrado.");
+    }
+
+    await setSession(ctx.chat.id, ctx.from.id, {
+      state: "selecting_players",
+      tournament_id: chat.tournament_id,
+      selected_ids: [],
+      positions_json: {},
+      kos_json: {},
+      played_at: new Date().toISOString(),
+    });
+
+    await ctx.answerCbQuery();
+    // renderiza a lista com checkboxes (reutiliza helper que atualiza ✅/⬜)
+    await ctx.reply(
+      "Selecione os participantes (toque para alternar). Depois clique em ✅ Concluir seleção.",
+      { reply_markup: { inline_keyboard: [] } }, // placeholder; logo abaixo renderizamos o teclado
+    );
+    await renderSelectKeyboard(ctx, []); // << depende do helper já enviado
+    return;
+  }
+
+  if (data === "menu_ranking") {
+    await ctx.answerCbQuery();
+    await sendRankingMessage(ctx);
+    return;
+  }
+
+  if (data === "menu_partidas") {
+    await ctx.answerCbQuery();
+    const base =
+      process.env.PUBLIC_FRONTEND_URL ||
+      "https://poker-ranking-finhane.vercel.app";
+    await ctx.reply("🎲 Últimas partidas:", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📄 Abrir página", url: `${base}/matches` }],
+        ],
+      },
+    });
+    return;
+  }
+
+  if (data === "menu_set_tournament") {
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      "⚙️ Para trocar o torneio padrão deste chat, envie:\n\n`/set_torneio <UUID>`",
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+  // ===== fim dos atalhos do /menu =====
 
   // carrega sessão
   const { data: sess } = await supa
@@ -650,6 +751,54 @@ async function confirmSummary(ctx: any) {
       [Markup.button.callback("❌ Cancelar", "cancel_save")],
     ]),
   );
+}
+
+async function sendRankingMessage(ctx: any) {
+  // torneio padrão
+  const { data: chat } = await supa
+    .from("telegram_chats")
+    .select("tournament_id")
+    .eq("chat_id", ctx.chat.id)
+    .maybeSingle();
+
+  const tid = chat?.tournament_id as string | undefined;
+  if (!tid) {
+    return ctx.reply("⚠️ Defina o torneio com:\n`/set_torneio <UUID>`", {
+      parse_mode: "Markdown",
+    });
+  }
+
+  const { data, error } = await supa.rpc("get_ranking", {
+    p_tournament_id: tid,
+    p_limit: 15,
+  });
+  if (error) {
+    console.error(error);
+    return ctx.reply("❌ Erro ao carregar o ranking.");
+  }
+
+  const rows: RankRow[] = (data ?? []) as RankRow[];
+  if (rows.length === 0) return ctx.reply("🏁 Sem partidas ainda.");
+
+  const table = asMonospaceTable(rows);
+  const base =
+    process.env.PUBLIC_FRONTEND_URL ||
+    "https://poker-ranking-finhane.vercel.app";
+
+  await ctx.replyWithMarkdown(table, {
+    reply_markup: {
+      inline_keyboard: [[{ text: "🌐 Ver Ranking Completo", url: `${base}/` }]],
+    },
+  });
+
+  const top3 = rows
+    .slice(0, 3)
+    .map(
+      (r: RankRow) =>
+        `${medal(r.posicao)} ${r.player_name} — ${r.total_points} pts`,
+    )
+    .join("\n");
+  await ctx.reply(`🏆 *Top 3*\n${top3}`, { parse_mode: "Markdown" });
 }
 
 /** Webhook handler (Next.js) */
