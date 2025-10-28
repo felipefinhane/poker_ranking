@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { Telegraf, Markup } from "telegraf";
 import { createClient } from "@supabase/supabase-js";
 import { randomUUID } from "crypto";
+import type { ReplyKeyboardMarkup } from "telegraf/types";
 
 /* =========================================================================
  * ENV & CLIENTS
@@ -38,7 +39,7 @@ type RankRow = {
 /* =========================================================================
  * UI HELPERS (REPLY KEYBOARD / INLINE)
  * ========================================================================= */
-function mainReplyKeyboard() {
+function mainReplyKeyboard(): ReplyKeyboardMarkup {
   return {
     keyboard: [
       [{ text: "➕ Nova Partida" }],
@@ -48,7 +49,7 @@ function mainReplyKeyboard() {
     resize_keyboard: true,
     is_persistent: true,
     one_time_keyboard: false,
-  } as const;
+  };
 }
 
 function mainMenuKeyboard() {
@@ -452,13 +453,11 @@ bot.command("set_torneio", async (ctx) => {
   const tid = parts[1];
   if (!tid) return ctx.reply("Uso: /set_torneio <UUID-do-torneio>");
 
-  await supa
-    .from("telegram_chats")
-    .upsert({
-      chat_id: ctx.chat.id,
-      tournament_id: tid,
-      updated_at: new Date().toISOString(),
-    });
+  await supa.from("telegram_chats").upsert({
+    chat_id: ctx.chat.id,
+    tournament_id: tid,
+    updated_at: new Date().toISOString(),
+  });
   await ctx.reply(`✅ Torneio definido: ${tid}`, {
     reply_markup: mainReplyKeyboard(),
   });
