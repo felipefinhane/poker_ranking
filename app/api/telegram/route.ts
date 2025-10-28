@@ -169,6 +169,45 @@ function getSafeIds(ctx: any) {
   return { chatId, userId };
 }
 
+function groupMainInline() {
+  const base =
+    process.env.PUBLIC_FRONTEND_URL ||
+    "https://poker-ranking-finhane.vercel.app";
+  return {
+    inline_keyboard: [
+      [{ text: "➕ Nova Partida", callback_data: "menu_newmatch" }],
+      [
+        { text: "🏆 Ranking", callback_data: "menu_ranking" },
+        { text: "🎲 Partidas", url: `${base}/matches` },
+      ],
+      [{ text: "⚙️ Trocar Torneio", callback_data: "menu_set_tournament" }],
+    ],
+  } as const;
+}
+
+async function ensurePinnedMenu(ctx: any) {
+  // Só faz sentido em grupos/supergrupos
+  if (
+    !ctx.chat ||
+    (ctx.chat.type !== "group" && ctx.chat.type !== "supergroup")
+  )
+    return;
+
+  // Envia/atualiza uma mensagem de menu
+  const msg = await ctx.reply("📋 Menu do bot", {
+    reply_markup: groupMainInline(),
+    parse_mode: "Markdown",
+    disable_notification: true,
+  });
+
+  // Tenta fixar
+  try {
+    await ctx.pinChatMessage(msg.message_id);
+  } catch (e) {
+    // Sem permissão para fixar? Tudo bem, apenas ignora.
+  }
+}
+
 /* =========================================================================
  * PERMISSIONS HELPERS
  * ========================================================================= */
@@ -493,12 +532,42 @@ bot.start(async (ctx) => {
   await ctx.reply(
     `👋 Olá, ${ctx.from.first_name}! Seu Telegram ID é: ${ctx.from.id}`,
   );
-  // Teclado fixo + atalhos (e tenta fixar)
-  await showPersistentMenu(ctx);
+  if (ctx.chat.type === "private") {
+    await ctx.reply("Bem-vindo! Use os botões abaixo:", {
+      reply_markup: {
+        keyboard: [
+          [{ text: "➕ Nova Partida" }],
+          [{ text: "🏆 Ranking" }, { text: "🎲 Partidas" }],
+          [{ text: "⚙️ Trocar Torneio" }],
+        ],
+        resize_keyboard: true,
+        is_persistent: true,
+        one_time_keyboard: false,
+      },
+    });
+  } else {
+    await ensurePinnedMenu(ctx);
+  }
 });
 
 bot.command("menu", async (ctx) => {
-  await showMainMenu(ctx);
+  if (ctx.chat.type === "private") {
+    // Teclado persistente só no privado
+    await ctx.reply("Menu:", {
+      reply_markup: {
+        keyboard: [
+          [{ text: "➕ Nova Partida" }],
+          [{ text: "🏆 Ranking" }, { text: "🎲 Partidas" }],
+          [{ text: "⚙️ Trocar Torneio" }],
+        ],
+        resize_keyboard: true,
+        is_persistent: true,
+        one_time_keyboard: false,
+      },
+    });
+  } else {
+    await ensurePinnedMenu(ctx); // No grupo: inline keyboard + fixar
+  }
 });
 
 bot.command("set_torneio", async (ctx) => {
